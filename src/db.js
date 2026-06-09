@@ -1,0 +1,128 @@
+import Database from 'better-sqlite3';
+import { mkdirSync } from 'fs';
+import { dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+mkdirSync(new URL('../data', import.meta.url).pathname, { recursive: true });
+
+const dbPath = new URL('../data/co-reading.db', import.meta.url).pathname;
+const db = new Database(dbPath);
+
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+  );
+
+  CREATE TABLE IF NOT EXISTS tree_nodes (
+    id          TEXT PRIMARY KEY,
+    parent_id   TEXT REFERENCES tree_nodes(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
+  );
+
+  CREATE TABLE IF NOT EXISTS papers (
+    id              TEXT PRIMARY KEY,
+    title           TEXT NOT NULL DEFAULT '',
+    authors         TEXT NOT NULL DEFAULT '',
+    year            INTEGER,
+    doi             TEXT,
+    pdf_filename    TEXT,
+    full_text       TEXT NOT NULL DEFAULT '',
+    summary_bg          TEXT NOT NULL DEFAULT '',
+    summary_methods     TEXT NOT NULL DEFAULT '',
+    summary_results     TEXT NOT NULL DEFAULT '',
+    summary_conclusions TEXT NOT NULL DEFAULT '',
+    summary_limitations TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'unread',
+    notes           TEXT NOT NULL DEFAULT '',
+    tree_node_id    TEXT REFERENCES tree_nodes(id) ON DELETE SET NULL,
+    analyze_status  TEXT NOT NULL DEFAULT 'pending',
+    analyze_error   TEXT NOT NULL DEFAULT '',
+    created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+    updated_at      INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
+  );
+
+  CREATE TABLE IF NOT EXISTS messages (
+    id          TEXT PRIMARY KEY,
+    paper_id    TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    role        TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
+  );
+  CREATE INDEX IF NOT EXISTS idx_msg_paper ON messages(paper_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS tags (
+    id    TEXT PRIMARY KEY,
+    name  TEXT NOT NULL UNIQUE,
+    color TEXT NOT NULL DEFAULT '#6366f1'
+  );
+
+  CREATE TABLE IF NOT EXISTS paper_tags (
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    tag_id   TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (paper_id, tag_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS insights (
+    id              TEXT PRIMARY KEY,
+    dimension       TEXT NOT NULL DEFAULT '延伸',
+    title           TEXT NOT NULL DEFAULT '',
+    content         TEXT NOT NULL DEFAULT '',
+    source_paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL,
+    source_context  TEXT NOT NULL DEFAULT '',
+    tags_json       TEXT NOT NULL DEFAULT '[]',
+    created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+    updated_at      INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
+  );
+  CREATE INDEX IF NOT EXISTS idx_insights_dimension ON insights(dimension);
+  CREATE INDEX IF NOT EXISTS idx_insights_source ON insights(source_paper_id);
+
+  CREATE TABLE IF NOT EXISTS annotations (
+    id          TEXT PRIMARY KEY,
+    paper_id    TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    quote       TEXT NOT NULL DEFAULT '',
+    note        TEXT NOT NULL DEFAULT '',
+    author      TEXT NOT NULL DEFAULT 'user',
+    kind        TEXT NOT NULL DEFAULT 'note',
+    parent_id   TEXT REFERENCES annotations(id) ON DELETE CASCADE,
+    created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
+  );
+  CREATE INDEX IF NOT EXISTS idx_ann_paper ON annotations(paper_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS section_progress (
+    id              TEXT PRIMARY KEY,
+    paper_id        TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    section_title   TEXT NOT NULL DEFAULT '',
+    section_order   INTEGER NOT NULL DEFAULT 0,
+    read            INTEGER NOT NULL DEFAULT 0,
+    created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
+  );
+  CREATE INDEX IF NOT EXISTS idx_sec_paper ON section_progress(paper_id, section_order);
+`);
+
+export function getSetting(key) {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+  return row ? row.value : null;
+}
+
+export function setSetting(key, value) {
+  db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value);
+}
+
+export function getSettings() {
+  const rows = db.prepare('SELECT key, value FROM settings').all();
+  const obj = {};
+  for (const { key, value } of rows) {
+    obj[key] = value;
+  }
+  return obj;
+}
+
+export default db;

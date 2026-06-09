@@ -1,0 +1,359 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { settingsApi, logsApi } from '../api';
+import { useStore, getProviderDefaults } from '../store';
+
+export default function Settings() {
+  const { provider, setProvider, advancedOpen, toggleAdvanced } = useStore();
+
+  const [apiKey, setApiKey] = useState('');
+  const [status, setStatus] = useState(null); // { ok, message }
+  const [testing, setTesting] = useState(false);
+
+  // Advanced
+  const [chatFormat, setChatFormat] = useState('anthropic');
+  const [chatBaseUrl, setChatBaseUrl] = useState('');
+  const [chatModel, setChatModel] = useState('');
+  const [analyzeFormat, setAnalyzeFormat] = useState('openai');
+  const [analyzeBaseUrl, setAnalyzeBaseUrl] = useState('');
+  const [analyzeApiKey, setAnalyzeApiKey] = useState('');
+  const [analyzeModel, setAnalyzeModel] = useState('');
+
+  // Logs
+  const [logs, setLogs] = useState([]);
+  const [showLogs, setShowLogs] = useState(false);
+
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  const loadSettings = async () => {
+    try {
+      // Load settings from localStorage (frontend-only settings like API keys)
+      const saved = JSON.parse(localStorage.getItem('co-reading-settings') || '{}');
+      if (saved.apiKey) setApiKey(saved.apiKey);
+      if (saved.provider) setProvider(saved.provider);
+      if (saved.advanced) {
+        setChatFormat(saved.advanced.chatFormat || 'anthropic');
+        setChatBaseUrl(saved.advanced.chatBaseUrl || '');
+        setChatModel(saved.advanced.chatModel || '');
+        setAnalyzeFormat(saved.advanced.analyzeFormat || 'openai');
+        setAnalyzeBaseUrl(saved.advanced.analyzeBaseUrl || '');
+        setAnalyzeApiKey(saved.advanced.analyzeApiKey || '');
+        setAnalyzeModel(saved.advanced.analyzeModel || '');
+      }
+    } catch {}
+
+    // Check backend configuration
+    try {
+      const cfg = await settingsApi.get();
+      if (cfg.configured && !apiKey) {
+        setStatus({ ok: true, message: '已配置' });
+      }
+    } catch {
+      // Backend may not be running yet
+    }
+  };
+
+  const handleProviderChange = (p) => {
+    setProvider(p);
+    const defaults = getProviderDefaults(p);
+    setChatFormat(defaults.format);
+    setChatBaseUrl(defaults.base_url);
+    setChatModel(defaults.model);
+    setAnalyzeFormat('openai');
+    setAnalyzeBaseUrl('');
+    setAnalyzeApiKey('');
+    setAnalyzeModel('');
+  };
+
+  const saveSettings = async () => {
+    const defaults = getProviderDefaults(provider);
+    const baseUrl = advancedOpen ? chatBaseUrl : defaults.base_url;
+    const format = advancedOpen ? chatFormat : defaults.format;
+    const model = advancedOpen ? chatModel : defaults.model;
+
+    // Save to localStorage for quick reload
+    const settings = {
+      provider,
+      apiKey,
+      advanced: { chatFormat, chatBaseUrl, chatModel, analyzeFormat, analyzeBaseUrl, analyzeApiKey, analyzeModel },
+    };
+    localStorage.setItem('co-reading-settings', JSON.stringify(settings));
+
+    // Save to backend SQLite settings table
+    try {
+      await settingsApi.save({
+        ai_api_key: apiKey,
+        ai_base_url: baseUrl,
+        ai_model: model,
+        ai_format: format,
+        analyze_api_key: advancedOpen && analyzeApiKey ? analyzeApiKey : apiKey,
+        analyze_base_url: advancedOpen && analyzeBaseUrl ? analyzeBaseUrl : baseUrl,
+        analyze_model: advancedOpen && analyzeModel ? analyzeModel : model,
+        analyze_format: advancedOpen ? analyzeFormat : 'openai',
+      });
+    } catch (err) {
+      console.error('Failed to save settings to backend:', err);
+    }
+
+    setStatus({ ok: true, message: '設定已儲存' });
+  };
+
+  const handleTest = async () => {
+    setTesting(true);
+    setStatus(null);
+
+    const baseUrl = advancedOpen ? chatBaseUrl : getProviderDefaults(provider).base_url;
+    const format = advancedOpen ? chatFormat : getProviderDefaults(provider).format;
+    const model = advancedOpen ? chatModel : getProviderDefaults(provider).model;
+
+    try {
+      const result = await settingsApi.test({
+        base_url: baseUrl,
+        api_key: apiKey,
+        model: model,
+        format: format,
+      });
+      if (result.ok) {
+        setStatus({ ok: true, message: '連接正常' });
+      } else {
+        setStatus({ ok: false, message: result.error || 'Key 無效，請重新確認' });
+      }
+    } catch (err) {
+      setStatus({ ok: false, message: err.message });
+    }
+    setTesting(false);
+  };
+
+  const loadLogs = async () => {
+    setShowLogs(!showLogs);
+    if (!showLogs) {
+      try {
+        const data = await logsApi.get(100);
+        setLogs(data.logs || []);
+      } catch {
+        setLogs([]);
+      }
+    }
+  };
+
+  const providerInfo = {
+    anthropic: { label: 'Anthropic (Claude)', url: 'console.anthropic.com' },
+    openai: { label: 'OpenAI', url: 'platform.openai.com' },
+    deepseek: { label: 'DeepSeek', url: 'platform.deepseek.com' },
+    custom: { label: '其他（自定義）', url: null },
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto">
+      <h2 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">⚙️ 設定</h2>
+
+      <div className="space-y-4">
+        {/* API Key */}
+        <div>
+          <h3 className="text-sm font-semibold text-gray-700 mb-2">🔑 API Key</h3>
+          <p className="text-sm text-gray-500 mb-2">
+            填入你的 API Key 即可開始使用。
+          </p>
+
+          {/* Provider selector */}
+          <div className="flex flex-wrap gap-2 mb-3">
+            {Object.entries(providerInfo).map(([k, v]) => (
+              <label key={k} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="provider"
+                  checked={provider === k}
+                  onChange={() => handleProviderChange(k)}
+                  className="text-primary"
+                />
+                {v.label}
+              </label>
+            ))}
+          </div>
+
+          {/* API Key input */}
+          <div className="mb-2">
+            <input
+              type="password"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+              placeholder="在此貼入你的 API Key"
+              value={apiKey}
+              onChange={e => setApiKey(e.target.value)}
+            />
+          </div>
+
+          {providerInfo[provider]?.url && (
+            <p className="text-xs text-gray-400 mb-3">
+              前往 <a href={`https://${providerInfo[provider].url}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{providerInfo[provider].url}</a> 申請 API Key
+            </p>
+          )}
+
+          <div className="flex items-center gap-3 mb-3">
+            <button
+              className="px-4 py-1.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+              onClick={saveSettings}
+            >
+              儲存
+            </button>
+            <button
+              className="px-4 py-1.5 border border-gray-300 rounded-lg text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+              onClick={handleTest}
+              disabled={testing || !apiKey}
+            >
+              {testing ? '測試中...' : '測試連接'}
+            </button>
+          </div>
+
+          {status && (
+            <p className={`text-sm ${status.ok ? 'text-green-600' : 'text-red-500'}`}>
+              {status.ok ? '✅ ' : '❌ '}{status.message}
+            </p>
+          )}
+        </div>
+
+        {/* Advanced settings */}
+        <div className="border-t border-gray-200 pt-4">
+          <button
+            className="text-sm text-gray-600 hover:text-gray-800 font-medium"
+            onClick={toggleAdvanced}
+          >
+            {advancedOpen ? '▾' : '▸'} 進階設定（使用其他 AI 服務）
+          </button>
+
+          {advancedOpen && (
+            <div className="mt-3 space-y-4 pl-4 border-l-2 border-gray-100">
+              {/* Chat model */}
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-2">💬 討論用模型</h4>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-gray-500">API 格式</label>
+                    <select
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
+                      value={chatFormat}
+                      onChange={e => setChatFormat(e.target.value)}
+                    >
+                      <option value="anthropic">Anthropic</option>
+                      <option value="openai">OpenAI</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Model</label>
+                    <input
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
+                      value={chatModel}
+                      onChange={e => setChatModel(e.target.value)}
+                      placeholder="claude-sonnet-4-6"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-xs text-gray-500">Base URL</label>
+                    <input
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
+                      value={chatBaseUrl}
+                      onChange={e => setChatBaseUrl(e.target.value)}
+                      placeholder="https://api.anthropic.com/v1"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Analyze model */}
+              <div>
+                <h4 className="text-sm font-medium text-gray-700 mb-2">📄 通讀用模型（可選）</h4>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-gray-500">API 格式</label>
+                    <select
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
+                      value={analyzeFormat}
+                      onChange={e => setAnalyzeFormat(e.target.value)}
+                    >
+                      <option value="anthropic">Anthropic</option>
+                      <option value="openai">OpenAI</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Model</label>
+                    <input
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
+                      value={analyzeModel}
+                      onChange={e => setAnalyzeModel(e.target.value)}
+                      placeholder="deepseek-chat"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Base URL</label>
+                    <input
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
+                      value={analyzeBaseUrl}
+                      onChange={e => setAnalyzeBaseUrl(e.target.value)}
+                      placeholder="https://api.deepseek.com/v1"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">API Key（留空則使用上方）</label>
+                    <input
+                      type="password"
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
+                      value={analyzeApiKey}
+                      onChange={e => setAnalyzeApiKey(e.target.value)}
+                      placeholder="留空 = 使用主 API Key"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Running logs */}
+        <div className="border-t border-gray-200 pt-4">
+          <button
+            className="text-sm text-gray-600 hover:text-gray-800 font-medium"
+            onClick={loadLogs}
+          >
+            📋 運行日誌 {showLogs ? '▾' : '▸'}
+          </button>
+
+          {showLogs && (
+            <div className="mt-2">
+              <div className="bg-gray-900 text-gray-300 rounded-lg p-3 text-xs font-mono max-h-64 overflow-y-auto">
+                {logs.length === 0 ? (
+                  <p className="text-gray-500">尚無日誌</p>
+                ) : (
+                  logs.map((line, i) => (
+                    <div
+                      key={i}
+                      className={`${line.includes('[ERROR]') ? 'text-red-400' : 'text-gray-400'}`}
+                    >
+                      {line}
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="flex gap-2 mt-2">
+                <button
+                  className="text-xs text-gray-500 hover:text-gray-700"
+                  onClick={async () => {
+                    try { const data = await logsApi.get(100); setLogs(data.logs || []); } catch {}
+                  }}
+                >
+                  刷新
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Save note about settings storage */}
+        <div className="border-t border-gray-200 pt-3">
+          <p className="text-xs text-gray-400">
+            API Key 儲存在瀏覽器本地儲存（localStorage），不會上傳到任何服務器。後端透過 SQLite 的 settings 表讀取配置。
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
