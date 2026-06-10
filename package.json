@@ -17,6 +17,7 @@
     "appId": "top.eliasandkitten.co-reading",
     "productName": "Co-Reading",
     "files": [
+      "electron.js",
       "dist/**/*",
       "src/**/*",
       "node_modules/**/*",
