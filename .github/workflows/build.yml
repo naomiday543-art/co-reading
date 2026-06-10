@@ -19,7 +19,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: macos-dmg
-          path: release/*.dmg
+          path: dist/*.dmg
 
   windows:
     runs-on: windows-latest
@@ -34,7 +34,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: windows-exe
-          path: release/*.exe
+          path: dist/*.exe
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

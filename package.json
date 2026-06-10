@@ -9,9 +9,9 @@
     "build": "npx vite build --config vite.config.js",
     "start": "node src/server.js",
     "electron": "electron .",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:win": "npm run build && electron-builder --win",
-    "postinstall": "electron-rebuild -f -w better-sqlite3 || true"
+    "dist:mac": "npm run electron:rebuild && npm run build && electron-builder --mac",
+    "dist:win": "npm run electron:rebuild && npm run build && electron-builder --win",
+    "electron:rebuild": "electron-rebuild -f -w better-sqlite3"
   },
   "build": {
     "appId": "top.eliasandkitten.co-reading",
