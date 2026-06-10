@@ -2,3 +2,7 @@ node_modules/
 dist/
 data/
 .env
+release/
+*.dmg
+*.zip
+*.exe

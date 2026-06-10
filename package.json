@@ -1,11 +1,38 @@
 {
   "name": "co-reading",
   "version": "1.0.0",
+  "description": "AI 論文共讀系統 — 上傳 PDF、AI 通讀、討論論文、自動提取洞察",
   "type": "module",
+  "main": "electron.js",
   "scripts": {
     "dev": "concurrently \"node --watch src/server.js\" \"npx vite --config vite.config.js\"",
     "build": "npx vite build --config vite.config.js",
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "electron": "electron .",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:win": "npm run build && electron-builder --win",
+    "postinstall": "electron-rebuild -f -w better-sqlite3 || true"
+  },
+  "build": {
+    "appId": "top.eliasandkitten.co-reading",
+    "productName": "Co-Reading",
+    "files": [
+      "dist/**/*",
+      "src/**/*",
+      "node_modules/**/*",
+      "package.json",
+      ".env.example"
+    ],
+    "mac": {
+      "category": "public.app-category.education",
+      "target": ["dmg", "zip"]
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**"
+    ]
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",
@@ -18,6 +45,9 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^35.0.0",
+    "electron-builder": "^25.1.0",
+    "electron-rebuild": "^3.2.9",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^9.0.1",
