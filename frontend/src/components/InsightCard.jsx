@@ -50,7 +50,7 @@ export default function InsightCard({ insight, onClick, onEdit, onDelete, compac
               onClick={(e) => { e.stopPropagation(); onEdit(insight); }}
               title="編輯"
             >
-              ✏️
+              ✎
             </button>
           )}
           {onDelete && (
@@ -59,7 +59,7 @@ export default function InsightCard({ insight, onClick, onEdit, onDelete, compac
               onClick={(e) => { e.stopPropagation(); onDelete(insight.id); }}
               title="刪除"
             >
-              🗑️
+              ✕
             </button>
           )}
         </div>
@@ -67,7 +67,7 @@ export default function InsightCard({ insight, onClick, onEdit, onDelete, compac
       <p className="text-sm text-gray-600 line-clamp-2 mb-2">{insight.content}</p>
       <div className="flex items-center justify-between text-xs text-gray-400">
         {insight.source_paper_title ? (
-          <span className="truncate max-w-[70%]">📄 {insight.source_paper_title}</span>
+          <span className="truncate max-w-[70%]">{insight.source_paper_title}</span>
         ) : (
           <span />
         )}

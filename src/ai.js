@@ -1,6 +1,7 @@
 import { getSetting, getSettings } from './db.js';
 import db from './db.js';
 import { log } from './logger.js';
+import { searchInsights } from './search.js';
 
 function resolveConfig(prefix) {
   const dbSettings = getSettings();
@@ -270,7 +271,8 @@ export async function chatAboutPaper(paper, history, userMessage, onChunk) {
     ? paper.full_text.slice(0, 100000) + '\n[全文已截斷]'
     : paper.full_text;
 
-  const systemContent = `你是一位科研導師，正在幫助用戶閱讀和理解一篇學術論文。
+  // Stable part: paper info + full text + instructions — eligible for prompt cache
+  const stableSystem = `你是一位科研導師，正在幫助用戶閱讀和理解一篇學術論文。
 
 以下是這篇論文的信息：
 標題：${paper.title}
@@ -294,52 +296,59 @@ ${fullText}
 4. 適當引用論文中的具體段落或數據
 5. 使用用戶提問時所用的語言回答`;
 
-  // Inject related insights from this paper (and cross-paper keyword matches)
+  // Variable part: injected insights — changes per-turn, not cached
+  let insightText = '';
+
   try {
     const ownInsights = db.prepare(
       'SELECT dimension, title, content FROM insights WHERE source_paper_id = ? ORDER BY updated_at DESC LIMIT 5'
     ).all(paper.id);
 
     if (ownInsights.length > 0) {
-      systemContent += '\n\n用戶之前從這篇論文提煉的洞察：\n';
+      insightText += '\n\n用戶之前從這篇論文提煉的洞察：\n';
       for (const ins of ownInsights) {
-        systemContent += `- [${ins.dimension}] ${ins.title}: ${ins.content.slice(0, 200)}\n`;
+        insightText += `- [${ins.dimension}] ${ins.title}: ${ins.content.slice(0, 200)}\n`;
       }
-      systemContent += '在回答時，適時引用和關聯這些洞察，幫助用戶建立跨論文的理解。';
+      insightText += '在回答時，適時引用和關聯這些洞察，幫助用戶建立跨論文的理解。';
     }
 
-    // Also inject insights from other papers that might be relevant via keyword overlap
-    const otherInsights = db.prepare(
-      'SELECT i.dimension, i.title, i.content, p.title as paper_title FROM insights i LEFT JOIN papers p ON i.source_paper_id = p.id WHERE i.source_paper_id != ? AND i.source_paper_id IS NOT NULL ORDER BY i.updated_at DESC LIMIT 100'
-    ).all(paper.id);
+    // Cross-paper related insights via FTS5 trigram search
+    const related = searchInsights(userMessage, { excludePaperId: paper.id, limit: 3 });
 
-    const userKeywords = userMessage.toLowerCase().split(/\s+/).filter(w => w.length > 1);
-    const ptags = db.prepare('SELECT t.name FROM tags t JOIN paper_tags pt ON t.id = pt.tag_id WHERE pt.paper_id = ?').all(paper.id);
-    const paperKeywords = [...(paper.title || '').toLowerCase().split(/\s+/), ...ptags.map(t => t.name.toLowerCase())];
-    const allKeywords = [...new Set([...userKeywords, ...paperKeywords])];
+    if (related.length > 0) {
+      const paperTitles = new Map();
+      for (const ins of related) {
+        if (ins.source_paper_id && !paperTitles.has(ins.source_paper_id)) {
+          const p = db.prepare('SELECT title FROM papers WHERE id = ?').get(ins.source_paper_id);
+          paperTitles.set(ins.source_paper_id, p?.title || null);
+        }
+      }
 
-    const matched = otherInsights
-      .map(ins => {
-        const text = `${ins.title} ${ins.content}`.toLowerCase();
-        const score = allKeywords.filter(kw => text.includes(kw)).length;
-        return { ...ins, score };
-      })
-      .filter(ins => ins.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 3);
-
-    if (matched.length > 0) {
-      systemContent += '\n\n來自其他論文的相關洞察：\n';
-      for (const ins of matched) {
-        systemContent += `- [${ins.dimension}] ${ins.title}（來自《${ins.paper_title}》）: ${ins.content.slice(0, 150)}\n`;
+      insightText += '\n\n來自其他論文的相關洞察：\n';
+      for (const ins of related) {
+        const paperTitle = ins.source_paper_id ? paperTitles.get(ins.source_paper_id) : null;
+        insightText += `- [${ins.dimension}] ${ins.title}（來自《${paperTitle || '未知'}》）: ${ins.content.slice(0, 150)}\n`;
       }
     }
-  } catch {
-    // Insight injection is best-effort; don't break chat if it fails
+  } catch (err) {
+    console.error('[INSIGHT-INJECT] failed:', err.message);
+  }
+
+  // Build system: array with cache_control for anthropic, plain string for openai
+  let systemForRequest;
+  if (config.format === 'anthropic') {
+    systemForRequest = [
+      { type: 'text', text: stableSystem, cache_control: { type: 'ephemeral' } },
+    ];
+    if (insightText) {
+      systemForRequest.push({ type: 'text', text: insightText });
+    }
+  } else {
+    systemForRequest = stableSystem + insightText;
   }
 
   const messages = [
-    { role: 'system', content: systemContent },
+    { role: 'system', content: systemForRequest },
     ...history.map(h => ({ role: h.role, content: h.content })),
     { role: 'user', content: userMessage },
   ];

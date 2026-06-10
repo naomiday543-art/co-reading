@@ -1,11 +1,11 @@
 import React from 'react';
 
 const sections = [
-  { key: 'summary_bg', label: '背景', icon: '🔬' },
-  { key: 'summary_methods', label: '方法', icon: '⚙️' },
-  { key: 'summary_results', label: '結果', icon: '📊' },
-  { key: 'summary_conclusions', label: '結論', icon: '💡' },
-  { key: 'summary_limitations', label: '局限', icon: '⚠️' },
+  { key: 'summary_bg', label: '背景', icon: '' },
+  { key: 'summary_methods', label: '方法', icon: '' },
+  { key: 'summary_results', label: '結果', icon: '' },
+  { key: 'summary_conclusions', label: '結論', icon: '' },
+  { key: 'summary_limitations', label: '局限', icon: '' },
 ];
 
 export default function SummaryView({ paper }) {
@@ -46,7 +46,7 @@ export default function SummaryView({ paper }) {
   return (
     <div className="space-y-4">
       <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-        📋 結構化摘要
+        結構化摘要
       </h3>
       {sections.map(({ key, label, icon }) => {
         const content = paper[key];

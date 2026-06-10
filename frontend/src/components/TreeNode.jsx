@@ -55,7 +55,7 @@ export default function TreeNode({ node, depth, selectedId, onSelect, onRefresh 
         >
           {hasChildren ? (expanded ? '▾' : '▸') : <span className="w-4" />}
         </button>
-        <span className="mr-1">{expanded && hasChildren ? '📂' : '📄'}</span>
+        <span className="mr-1">{expanded && hasChildren ? '▾' : '▸'}</span>
         {editing ? (
           <input
             autoFocus

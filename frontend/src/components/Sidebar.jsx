@@ -1,12 +1,39 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useStore } from '../store';
 import { treeApi, papersApi, tagsApi } from '../api';
 import TreeNode from './TreeNode';
 
+const MIN_WIDTH = 160;
+const MAX_WIDTH = 480;
+const DEFAULT_WIDTH = 240;
+
 export default function Sidebar({ onNavigate, onRefresh }) {
-  const { tree, tags, selectedTreeNode, selectedTag, setSelectedTreeNode, setSelectedTag } = useStore();
+  const { tree, tags, selectedTreeNode, selectedTag, setSelectedTreeNode, setSelectedTag, sidebarOpen } = useStore();
   const [newFolderName, setNewFolderName] = useState('');
   const [showNewFolder, setShowNewFolder] = useState(false);
+  const [width, setWidth] = useState(() => {
+    const saved = Number(localStorage.getItem('sidebarWidth'));
+    return saved >= MIN_WIDTH && saved <= MAX_WIDTH ? saved : DEFAULT_WIDTH;
+  });
+  const [dragging, setDragging] = useState(false);
+  const lastWidth = useRef(width);
+
+  const startDrag = (e) => {
+    e.preventDefault();
+    setDragging(true);
+    const onMove = (ev) => {
+      const w = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, ev.clientX));
+      lastWidth.current = w;
+      setWidth(w);
+    };
+    const onUp = () => {
+      setDragging(false);
+      localStorage.setItem('sidebarWidth', String(lastWidth.current));
+      document.removeEventListener('mousemove', onMove);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp, { once: true });
+  };
 
   const handleCreateFolder = async () => {
     if (!newFolderName.trim()) return;
@@ -45,9 +72,12 @@ export default function Sidebar({ onNavigate, onRefresh }) {
   };
 
   return (
-    <aside className="sidebar w-60 shrink-0 border-r border-gray-200 flex flex-col overflow-hidden">
+    <aside
+      className={`sidebar shrink-0 flex flex-col overflow-hidden relative ${sidebarOpen ? 'border-r border-gray-200' : ''} ${dragging ? '' : 'transition-[width] duration-200'}`}
+      style={{ width: sidebarOpen ? width : 0 }}
+    >
       {/* Tree Section */}
-      <div className="flex-1 overflow-y-auto p-3">
+      <div className="flex-1 overflow-y-auto p-3" style={{ minWidth: MIN_WIDTH }}>
         <div className="text-xs font-semibold text-gray-500 uppercase mb-2">知識樹</div>
 
         {/* All papers */}
@@ -55,7 +85,7 @@ export default function Sidebar({ onNavigate, onRefresh }) {
           className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm ${!selectedTreeNode && !selectedTag ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-gray-100'}`}
           onClick={() => { setSelectedTreeNode(null); setSelectedTag(null); onNavigate('library'); }}
         >
-          <span>📁</span>
+          
           <span className="flex-1">全部論文</span>
         </div>
 
@@ -80,7 +110,7 @@ export default function Sidebar({ onNavigate, onRefresh }) {
           className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm ${selectedTreeNode === '__none' ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-gray-100'}`}
           onClick={() => { setSelectedTreeNode('__none'); setSelectedTag(null); onNavigate('library'); }}
         >
-          <span>📁</span>
+          
           <span className="flex-1">未分類</span>
         </div>
 
@@ -131,10 +161,18 @@ export default function Sidebar({ onNavigate, onRefresh }) {
           className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm hover:bg-gray-100"
           onClick={() => onNavigate('insights')}
         >
-          <span>💡</span>
+          
           <span className="flex-1">所有洞察</span>
         </div>
       </div>
+
+      {/* Drag handle for resizing */}
+      {sidebarOpen && (
+        <div
+          className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/30 active:bg-primary/50"
+          onMouseDown={startDrag}
+        />
+      )}
     </aside>
   );
 }

@@ -1,10 +1,10 @@
 import React from 'react';
 import TagBadge from './TagBadge';
 
-const statusIcons = {
-  unread: '📥',
-  reading: '📖',
-  done: '✅',
+const statusDots = {
+  unread: '#B4B2A9',
+  reading: '#2F3437',
+  done: '#346538',
 };
 
 const statusLabels = {
@@ -15,7 +15,7 @@ const statusLabels = {
 
 export default function PaperCard({ paper, onClick, onRefresh }) {
   const statusLabel = statusLabels[paper.status] || '待讀';
-  const statusIcon = statusIcons[paper.status] || '📥';
+  const statusDot = statusDots[paper.status] || statusDots.unread;
   const hasSummary = paper.summary_bg || paper.summary_conclusions;
   const snippet = paper.summary_conclusions
     ? paper.summary_conclusions.slice(0, 80) + '...'
@@ -57,8 +57,9 @@ export default function PaperCard({ paper, onClick, onRefresh }) {
 
         {/* Status */}
         <div className="shrink-0 flex flex-col items-end gap-1">
-          <span className="text-xs text-gray-500 flex items-center gap-1">
-            {statusIcon} {statusLabel}
+          <span className="text-xs text-gray-500 flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ backgroundColor: statusDot }} />
+            {statusLabel}
           </span>
 
           {/* Analyze status */}

@@ -9,6 +9,8 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
   const [streaming, setStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [error, setError] = useState('');
+  const [extracting, setExtracting] = useState(false);
+  const [extractResult, setExtractResult] = useState(null);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -73,12 +75,26 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
     }
   };
 
+  const handleExtract = async () => {
+    setExtracting(true);
+    setExtractResult(null);
+    setError('');
+    try {
+      const result = await papersApi.extractInsights(paperId);
+      setExtractResult(result);
+    } catch (err) {
+      setError(`提取失敗: ${err.message}`);
+    } finally {
+      setExtracting(false);
+    }
+  };
+
   const hasSummary = paper?.summary_conclusions || paper?.summary_bg;
 
   return (
     <div className="flex flex-col h-full">
       <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
-        💬 跟 AI 討論這篇論文
+        跟 AI 討論這篇論文
       </h3>
 
       {/* Messages */}
@@ -111,7 +127,7 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
                     onClick={onSaveInsight}
                     title="將這段回覆存為洞察"
                   >
-                    💡 存為洞察
+                    存為洞察
                   </button>
                 )}
               </div>
@@ -184,8 +200,28 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
           }}
           title="從 PDF 複製文字後，點這裡貼入"
         >
-          📋 貼上原文提問
+          貼上原文提問
         </button>
+
+        {/* Extract insights button */}
+        {messages.length >= 2 && (
+          <div className="flex items-center gap-2">
+            <button
+              className="text-xs text-gray-500 hover:text-primary flex items-center gap-1 px-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={handleExtract}
+              disabled={extracting}
+              title="從討論中自動提取洞察"
+            >
+              {extracting ? '… 提取中...' : '提取洞察'}
+            </button>
+            {extractResult && (
+              <span className="text-xs text-green-600">
+                新增 {extractResult.insights.length} 條洞察
+                {extractResult.skipped > 0 && `（${extractResult.skipped} 條進度已跳過）`}
+              </span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

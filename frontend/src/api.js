@@ -35,6 +35,7 @@ export const papersApi = {
   getMessages: (id) => request(`/papers/${id}/chat`),
   addTag: (paperId, tagId) => request(`/papers/${paperId}/tags`, { method: 'POST', body: { tag_id: tagId } }),
   removeTag: (paperId, tagId) => request(`/papers/${paperId}/tags/${tagId}`, { method: 'DELETE' }),
+  extractInsights: (paperId) => request(`/papers/${paperId}/extract-insights`, { method: 'POST' }),
 };
 
 export const tagsApi = {

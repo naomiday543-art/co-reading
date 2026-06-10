@@ -90,7 +90,7 @@ export default function Library({ onNavigate, onRefresh }) {
       {/* Paper list */}
       {papers.length === 0 ? (
         <div className="text-center py-16 text-gray-400">
-          <p className="text-lg mb-2">📄</p>
+          <p className="text-lg mb-2">—</p>
           <p className="text-sm">尚無文獻，拖拽 PDF 上傳開始</p>
         </div>
       ) : (

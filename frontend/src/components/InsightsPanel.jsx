@@ -62,7 +62,7 @@ export default function InsightsPanel({ onNavigate }) {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-gray-800">💡 洞察</h2>
+        <h2 className="text-lg font-semibold text-gray-800">洞察</h2>
         <button
           className="text-sm bg-primary text-white px-3 py-1 rounded-lg hover:bg-primary/90"
           onClick={() => setShowForm(true)}

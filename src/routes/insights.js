@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { nanoid } from 'nanoid';
 import db from '../db.js';
 import { log } from '../logger.js';
+import { findRelatedInsights } from '../search.js';
 
 const router = Router();
 
@@ -49,45 +50,14 @@ router.get('/insights/related', (req, res) => {
   const paper = db.prepare('SELECT * FROM papers WHERE id = ?').get(paper_id);
   if (!paper) return res.status(404).json({ error: '論文不存在' });
 
-  // Get paper tags for keyword matching
-  const paperTags = db.prepare(`
-    SELECT t.name FROM tags t
-    JOIN paper_tags pt ON t.id = pt.tag_id
-    WHERE pt.paper_id = ?
-  `).all(paper_id).map(t => t.name);
-
-  // Build keyword set from paper title + tags
-  const keywords = [...paperTags, ...(paper.title || '').split(/\s+/)].filter(Boolean);
-  if (keywords.length === 0) {
-    const insights = db.prepare(
-      'SELECT * FROM insights WHERE source_paper_id = ? ORDER BY updated_at DESC LIMIT 5'
-    ).all(paper_id);
-    return res.json(insights.map(ins => ({
-      ...ins,
-      tags_json: JSON.parse(ins.tags_json || '[]'),
-    })));
-  }
-
-  // Get insights from this paper + keyword-matched insights from other papers
   const ownInsights = db.prepare(
     'SELECT * FROM insights WHERE source_paper_id = ? ORDER BY updated_at DESC LIMIT 5'
   ).all(paper_id);
 
-  const otherInsights = db.prepare(
-    "SELECT * FROM insights WHERE source_paper_id != ? AND source_paper_id IS NOT NULL ORDER BY updated_at DESC LIMIT 50"
-  ).all(paper_id);
+  // Use FTS5 trigram search for related insights
+  const related = findRelatedInsights(paper_id, 5);
 
-  // Score and filter by keyword overlap
-  const scored = otherInsights.map(ins => {
-    const text = `${ins.title} ${ins.content}`.toLowerCase();
-    const score = keywords.filter(kw => text.includes(kw.toLowerCase())).length;
-    return { ...ins, score };
-  });
-
-  scored.sort((a, b) => b.score - a.score);
-  const matched = scored.filter(s => s.score > 0).slice(0, 5);
-
-  const combined = [...ownInsights, ...matched].slice(0, 10);
+  const combined = [...ownInsights, ...related].slice(0, 10);
 
   const paperStmt = db.prepare('SELECT id, title FROM papers WHERE id = ?');
   const result = combined.map(ins => ({

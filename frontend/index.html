@@ -10,7 +10,7 @@
         theme: {
           extend: {
             colors: {
-              primary: '#6366f1',
+              primary: '#2F3437',
             },
             fontFamily: {
               sans: ["-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],
@@ -22,20 +22,20 @@
     </script>
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
-      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-      .chat-bubble-user { background-color: #6366f1; color: white; border-radius: 12px 12px 4px 12px; }
-      .chat-bubble-ai { background-color: #f3f4f6; color: #1f2937; border-radius: 12px 12px 12px 4px; }
-      .card { border: 1px solid #e5e7eb; border-radius: 8px; transition: box-shadow 0.15s; }
-      .card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-      .sidebar { background-color: #f9fafb; }
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #2F3437; letter-spacing: -0.01em; }
+      .chat-bubble-user { background-color: #2F3437; color: #FFFFFF; border-radius: 8px 8px 2px 8px; }
+      .chat-bubble-ai { background-color: #F7F6F3; color: #2F3437; border-radius: 8px 8px 8px 2px; }
+      .card { border: 1px solid #EAEAEA; border-radius: 8px; transition: box-shadow 0.2s; }
+      .card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+      .sidebar { background-color: #FBFBFA; }
       @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
       .typing-dot { animation: pulse-dot 1.4s infinite; }
       .typing-dot:nth-child(2) { animation-delay: 0.2s; }
       .typing-dot:nth-child(3) { animation-delay: 0.4s; }
-      pre { background: #1f2937; color: #f3f4f6; padding: 0.75rem; border-radius: 6px; overflow-x: auto; font-size: 0.875rem; }
+      pre { background: #F7F6F3; color: #2F3437; border: 1px solid #EAEAEA; padding: 0.75rem; border-radius: 6px; overflow-x: auto; font-size: 0.875rem; }
       pre code { background: none; padding: 0; }
-      code { background: #f3f4f6; padding: 0.125rem 0.25rem; border-radius: 3px; font-size: 0.875em; }
-      blockquote { border-left: 3px solid #6366f1; padding-left: 1rem; color: #6b7280; margin: 0.5rem 0; }
+      code { background: #F7F6F3; padding: 0.125rem 0.25rem; border-radius: 3px; font-size: 0.875em; }
+      blockquote { border-left: 2px solid #D3D1C7; padding-left: 1rem; color: #787774; margin: 0.5rem 0; }
     </style>
   </head>
   <body class="bg-white text-gray-900 min-w-[768px]">

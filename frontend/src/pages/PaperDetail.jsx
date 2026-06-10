@@ -167,7 +167,7 @@ export default function PaperDetail({ paperId, onBack }) {
         </div>
 
         <button onClick={handleDelete} className="text-gray-400 hover:text-red-500 text-sm" title="刪除">
-          🗑️
+          ✕
         </button>
       </div>
 
@@ -181,13 +181,13 @@ export default function PaperDetail({ paperId, onBack }) {
               className={`text-sm px-3 py-1.5 border-b-2 transition-colors ${leftTab === 'summary' ? 'border-primary text-primary font-medium' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
               onClick={() => setLeftTab('summary')}
             >
-              📋 AI 摘要
+              AI 摘要
             </button>
             <button
               className={`text-sm px-3 py-1.5 border-b-2 transition-colors ${leftTab === 'fulltext' ? 'border-primary text-primary font-medium' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
               onClick={() => setLeftTab('fulltext')}
             >
-              📄 原文
+              原文
             </button>
           </div>
 
@@ -216,7 +216,7 @@ export default function PaperDetail({ paperId, onBack }) {
 
           {/* Notes */}
           <div className="mt-6">
-            <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">📝 我的筆記</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">我的筆記</h3>
             <textarea
               className="w-full border border-gray-300 rounded-lg p-3 text-sm resize-y min-h-[80px] focus:outline-none focus:ring-1 focus:ring-primary"
               placeholder="記錄你的想法..."
@@ -232,7 +232,7 @@ export default function PaperDetail({ paperId, onBack }) {
 
           {/* Tags */}
           <div className="mt-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">🏷️ Tags</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">Tags</h3>
             <div className="flex flex-wrap gap-1 mb-2">
               {(paper.tags || []).map(tag => (
                 <TagBadge key={tag.id} tag={tag} onRemove={() => handleRemoveTag(tag.id)} />
@@ -278,7 +278,7 @@ export default function PaperDetail({ paperId, onBack }) {
 
           {/* Tree assignment */}
           <div className="mt-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">📁 分類</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">分類</h3>
             <div className="relative">
               <button
                 className="text-sm border border-gray-300 rounded-lg px-2 py-1 text-gray-600 hover:bg-gray-50"
@@ -312,7 +312,7 @@ export default function PaperDetail({ paperId, onBack }) {
           {/* Related Insights */}
           <div className="mt-4 pt-3 border-t border-gray-100">
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-semibold text-gray-700">💡 相關洞察</h3>
+              <h3 className="text-sm font-semibold text-gray-700">相關洞察</h3>
               <button
                 className="text-xs text-primary hover:underline"
                 onClick={() => setShowInsightForm(true)}

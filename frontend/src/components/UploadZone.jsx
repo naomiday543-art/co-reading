@@ -51,7 +51,7 @@ export default function UploadZone({ onUploaded }) {
           <div className="flex flex-wrap gap-3">
             {progress.map((p, i) => (
               <div key={i} className="flex items-center gap-2 text-sm text-gray-600">
-                <span>{p.status === 'uploading' ? '⏳' : p.status === 'done' ? '✅' : '❌'}</span>
+                <span>{p.status === 'uploading' ? '…' : p.status === 'done' ? '✓' : '✕'}</span>
                 <span className="truncate max-w-[200px]">{p.name}</span>
               </div>
             ))}

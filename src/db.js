@@ -105,6 +105,35 @@ db.exec(`
     created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
   );
   CREATE INDEX IF NOT EXISTS idx_sec_paper ON section_progress(paper_id, section_order);
+
+  -- FTS5 trigram search for insights (Chinese + English mixed text)
+  CREATE VIRTUAL TABLE IF NOT EXISTS insights_fts USING fts5(
+    title, content, source_context,
+    tokenize='trigram'
+  );
+
+  CREATE TRIGGER IF NOT EXISTS insights_fts_ai AFTER INSERT ON insights BEGIN
+    INSERT INTO insights_fts(rowid, title, content, source_context)
+    VALUES (new.rowid, new.title, new.content, new.source_context);
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS insights_fts_ad AFTER DELETE ON insights BEGIN
+    INSERT INTO insights_fts(insights_fts, rowid, title, content, source_context)
+    VALUES ('delete', old.rowid, old.title, old.content, old.source_context);
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS insights_fts_au AFTER UPDATE ON insights BEGIN
+    INSERT INTO insights_fts(insights_fts, rowid, title, content, source_context)
+    VALUES ('delete', old.rowid, old.title, old.content, old.source_context);
+    INSERT INTO insights_fts(rowid, title, content, source_context)
+    VALUES (new.rowid, new.title, new.content, new.source_context);
+  END;
+`);
+
+// Backfill existing insights into FTS index (idempotent)
+db.exec(`
+  INSERT OR IGNORE INTO insights_fts(rowid, title, content, source_context)
+  SELECT rowid, title, content, source_context FROM insights;
 `);
 
 export function getSetting(key) {

@@ -7,6 +7,7 @@ import db from '../db.js';
 import { extractPDF } from '../pdf.js';
 import { analyzePaper } from '../ai.js';
 import { log } from '../logger.js';
+import { extractInsights } from '../memory.js';
 
 const router = Router();
 
@@ -248,6 +249,20 @@ router.post('/:id/analyze', (req, res) => {
 
   triggerAnalyze(paper.id);
   res.json({ ok: true, analyze_status: 'analyzing' });
+});
+
+// POST /api/papers/:id/extract-insights
+router.post('/:id/extract-insights', async (req, res) => {
+  try {
+    const paper = db.prepare('SELECT * FROM papers WHERE id = ?').get(req.params.id);
+    if (!paper) return res.status(404).json({ error: '論文不存在' });
+
+    const result = await extractInsights(paper.id);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    log('ERROR', `記憶提取失敗: ${req.params.id} — ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 export default router;
