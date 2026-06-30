@@ -6,3 +6,4 @@ release/
 *.dmg
 *.zip
 *.exe
+.DS_Store
