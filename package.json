@@ -5,7 +5,7 @@
   "type": "module",
   "main": "electron.js",
   "scripts": {
-    "dev": "concurrently \"node --watch src/server.js\" \"npx vite --config vite.config.js\"",
+    "dev": "concurrently \"PORT=3456 node --watch src/server.js\" \"npx vite --config vite.config.js\"",
     "build": "npx vite build --config vite.config.js",
     "start": "node src/server.js",
     "electron": "electron .",
