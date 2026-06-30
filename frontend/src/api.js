@@ -36,6 +36,10 @@ export const papersApi = {
   addTag: (paperId, tagId) => request(`/papers/${paperId}/tags`, { method: 'POST', body: { tag_id: tagId } }),
   removeTag: (paperId, tagId) => request(`/papers/${paperId}/tags/${tagId}`, { method: 'DELETE' }),
   extractInsights: (paperId) => request(`/papers/${paperId}/extract-insights`, { method: 'POST' }),
+  editMessage: (paperId, msgId, content) =>
+    request(`/papers/${paperId}/chat/edit`, { method: 'POST', body: { msg_id: msgId, content } }),
+  switchBranch: (paperId, forkId, branchId) =>
+    request(`/papers/${paperId}/chat/branch/switch`, { method: 'POST', body: { fork_id: forkId, branch_id: branchId } }),
 };
 
 export const tagsApi = {
@@ -73,34 +77,52 @@ export const insightsApi = {
   related: (paperId) => request(`/insights/related?paper_id=${paperId}`),
 };
 
+async function readSSEStream(response, { onDelta, onDone, onError }) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data: ')) continue;
+      try {
+        const data = JSON.parse(trimmed.slice(6));
+        if (data.type === 'delta') onDelta(data.content);
+        else if (data.type === 'done') onDone(data);
+        else if (data.type === 'error') onError(data.message);
+      } catch {}
+    }
+  }
+}
+
 export function streamChat(paperId, message, { onDelta, onDone, onError }) {
   return fetch(`${API}/api/papers/${paperId}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message }),
-  }).then(async (response) => {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
+  }).then(response => readSSEStream(response, { onDelta, onDone, onError }));
+}
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+export function regenerateChat(paperId, { onDelta, onDone, onError }) {
+  return fetch(`${API}/api/papers/${paperId}/chat?regenerate=true`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  }).then(response => readSSEStream(response, { onDelta, onDone, onError }));
+}
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data: ')) continue;
-        try {
-          const data = JSON.parse(trimmed.slice(6));
-          if (data.type === 'delta') onDelta(data.content);
-          else if (data.type === 'done') onDone(data);
-          else if (data.type === 'error') onError(data.message);
-        } catch {}
-      }
-    }
-  });
+export function continueChat(paperId, { onDelta, onDone, onError }) {
+  return fetch(`${API}/api/papers/${paperId}/chat?continue=true`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  }).then(response => readSSEStream(response, { onDelta, onDone, onError }));
 }

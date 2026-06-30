@@ -11,7 +11,8 @@
     "electron": "electron .",
     "dist:mac": "npm run electron:rebuild && npm run build && electron-builder --mac",
     "dist:win": "npm run electron:rebuild && npm run build && electron-builder --win",
-    "electron:rebuild": "electron-rebuild -f -w better-sqlite3"
+    "electron:rebuild": "electron-rebuild -f -w better-sqlite3",
+    "test": "node --test test/*.test.js"
   },
   "build": {
     "appId": "top.eliasandkitten.co-reading",

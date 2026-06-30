@@ -136,6 +136,52 @@ db.exec(`
   SELECT rowid, title, content, source_context FROM insights;
 `);
 
+// ── Idempotent migration: messages new columns + message_branches table ──
+function columnExists(table, column) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  return cols.some(c => c.name === column);
+}
+
+if (!columnExists('messages', 'seq')) {
+  db.exec(`ALTER TABLE messages ADD COLUMN seq INTEGER`);
+  // Backfill seq: per-paper sequential ordering by (created_at, rowid)
+  db.exec(`
+    UPDATE messages SET seq = (
+      SELECT COUNT(*) FROM messages m2
+      WHERE m2.paper_id = messages.paper_id
+        AND (m2.created_at < messages.created_at
+          OR (m2.created_at = messages.created_at AND m2.rowid <= messages.rowid))
+    )
+  `);
+}
+
+if (!columnExists('messages', 'regen_versions')) {
+  db.exec(`ALTER TABLE messages ADD COLUMN regen_versions TEXT`);
+}
+if (!columnExists('messages', 'regen_idx')) {
+  db.exec(`ALTER TABLE messages ADD COLUMN regen_idx INTEGER`);
+}
+if (!columnExists('messages', 'edited')) {
+  db.exec(`ALTER TABLE messages ADD COLUMN edited INTEGER DEFAULT 0`);
+}
+if (!columnExists('messages', 'edit_branches')) {
+  db.exec(`ALTER TABLE messages ADD COLUMN edit_branches TEXT`);
+}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS message_branches (
+    id TEXT PRIMARY KEY,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    fork_message_id TEXT NOT NULL,
+    tail_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
+  );
+  CREATE INDEX IF NOT EXISTS idx_message_branches_fork ON message_branches(fork_message_id);
+  CREATE INDEX IF NOT EXISTS idx_message_branches_paper ON message_branches(paper_id);
+  CREATE INDEX IF NOT EXISTS idx_msg_paper_seq ON messages(paper_id, seq);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_msg_paper_seq_unique ON messages(paper_id, seq);
+`);
+
 export function getSetting(key) {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
   return row ? row.value : null;

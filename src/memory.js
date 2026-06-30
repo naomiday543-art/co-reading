@@ -157,7 +157,7 @@ function parseExtractResponse(raw) {
  */
 export async function extractInsights(paperId) {
   const messages = db.prepare(
-    'SELECT role, content FROM messages WHERE paper_id = ? ORDER BY created_at ASC'
+    'SELECT role, content FROM messages WHERE paper_id = ? ORDER BY seq ASC'
   ).all(paperId);
 
   if (messages.length < 2) {

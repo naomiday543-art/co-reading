@@ -78,6 +78,11 @@ if (existsSync(distPath)) {
   });
 }
 
-app.listen(PORT, () => {
-  log('INFO', `Co-Reading 服務已啟動，端口 ${PORT}`);
-});
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1].replace(/^file:\/\//, '');
+if (isMain) {
+  app.listen(PORT, () => {
+    log('INFO', `Co-Reading 服務已啟動，端口 ${PORT}`);
+  });
+}
+
+export default app;

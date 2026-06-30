@@ -350,8 +350,10 @@ ${fullText}
   const messages = [
     { role: 'system', content: systemForRequest },
     ...history.map(h => ({ role: h.role, content: h.content })),
-    { role: 'user', content: userMessage },
   ];
+  if (userMessage) {
+    messages.push({ role: 'user', content: userMessage });
+  }
 
   const response = await makeRequest(config, {
     messages,
