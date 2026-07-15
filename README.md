@@ -2,6 +2,11 @@
 
 AI 論文共讀系統。上傳 PDF → AI 通讀生成結構化摘要 → 討論論文 → 自動提取洞察 → 建立跨論文知識網絡。
 
+> **全景手冊**：co-reading（洞察生產端）與 research-gateway（導師/記憶消費端）的跨系統傘狀總覽——
+> 兩者如何拼接、資料流、記憶浮現、契約現狀與路線——見
+> [`../research-gateway/docs/RESEARCH-STACK-MANUAL.md`](../research-gateway/docs/RESEARCH-STACK-MANUAL.md)。
+> 本系統的單機細節仍以本 README 與 [`TECHNICAL_MANUAL.md`](TECHNICAL_MANUAL.md) 為準。
+
 ## 快速開始
 
 ```bash
