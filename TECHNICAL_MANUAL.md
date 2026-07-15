@@ -418,9 +418,13 @@ DB `settings` 表 > 環境變量。Settings 頁面修改會即時生效，無需
 
 ---
 
-## 11. 整合面：與外部記憶庫合併
+## 11. 整合面：與 research-gateway 合併
 
-> 本節為 future work 參考。若整合 research gateway 或 [[memory-universe]] 之類的外部記憶系統，這是切入點。
+> **整合對象與方案已定**（2026-07-02）：對象是 research-gateway（+ 其背後的 Ombre :8001）。
+> 兩邊共同的契約——傳輸方式、tag 規範、dimension 映射、同步方向、ID 對應——
+> **唯一依據是 gateway 側的 [CO-READING-INTEGRATION.md](../research-gateway/docs/CO-READING-INTEGRATION.md)**，
+> gateway 手冊（HANDBOOK §6.5）也指向同一份。本節只保留 co-reading 側的資產說明與改動點；
+> 若本節與契約文檔衝突，以契約文檔為準。
 
 ### 11.1 記憶資產對應
 
@@ -432,50 +436,38 @@ DB `settings` 表 > 環境變量。Settings 頁面修改會即時生效，無需
 | `messages` | 過程性對話，**通常不直接同步**，只透過 `extractInsights` 蒸餾後輸出 |
 | `tree_nodes` + `paper_tags` | 領域/標籤層級結構 |
 
-### 11.2 同步方向選擇
+### 11.2 已定方向：單向匯出（outbox）
 
-**A. 單向匯出（co-reading → 記憶庫）**
-- 最簡單。在 `extractInsights` 寫入本地後，多寫一份到外部 API
-- 改動點：[src/memory.js:216](src/memory.js:216) INSERT 之後加 `await syncToGateway(insight)`
-- 建議用 outbox pattern：先寫本地，再用獨立 worker 補同步（避免 AI 流程被外部依賴拖慢）
+三個定案（詳見契約文檔 §一）：
 
-**B. 雙向同步**
-- 需要解決衝突（更新時間、刪除傳播、ID 對應）
-- 建議：新增 `insights.external_id` 與 `synced_at` 欄位，定時拉取 + diff
-- 跨論文檢索（[search.js findRelatedInsights](src/search.js)）可改為「本地 FTS5 + 遠端 vector」混合排序
+1. **單向匯出**：co-reading → gateway → Ombre。原本評估過的雙向同步、讀時聯合兩案
+   已寫入契約文檔的觸發條件，單向跑穩前不做。
+2. **傳輸走 gateway 的 `POST /memory/insights`**，不直連 Ombre（:8001 只在 VPS 內網）。
+   請求體格式、tag 規範（`source:co-reading` / `paper:<id>` / `dim:<dimension>` / `tree:<path>`）、
+   六維 dimension → Ombre 類型的映射表，全部見契約文檔 §二–§四。
+3. **outbox 模式**：先寫本地成功，再 fire-and-forget 同步；失敗靠 `synced_at IS NULL` 補傳，
+   `external_id` 冪等鍵防重複。AI 提取流程永遠不等外部網路。
 
-**C. 讀時聯合（co-reading 只查不存）**
-- `chatAboutPaper` 注入 insights 那段（[ai.js:303](src/ai.js:303)）改為查詢外部記憶庫
-- 適合外部已有龐大語料、co-reading 只是其中一個前端
+### 11.3 co-reading 側改動點（對應契約文檔 §八）
 
-### 11.3 建議的最小整合接口
-
-如果外部記憶庫提供以下 4 個 endpoint，整合最順：
-
-```
-POST   /memory/insights              # 寫入一條
-GET    /memory/insights?q=...&exclude_source=... # 全文檢索
-POST   /memory/insights/:id/link     # 關聯到本地 source（paper_id, message_id 等）
-DELETE /memory/insights/:id
-```
-
-對應的 co-reading 改動：
-1. 在 `settings` 表加 `gateway_url` / `gateway_token`
-2. 新增 `src/gateway.js` 封裝 4 個調用
-3. 在 [memory.js extractInsights](src/memory.js:158) 結束處 fire-and-forget 同步
-4. 在 [search.js searchInsights](src/search.js:7) 改為先查本地，命中數不足時補查 gateway
+1. `settings` 表加 `gateway_url` / `gateway_token`（Settings 頁可配）
+2. 新增 `src/gateway.js`：封裝 POST + 啟動時補傳 `synced_at IS NULL` 的條目
+3. [src/db.js](src/db.js)：`insights` 加 `external_ombre_id TEXT UNIQUE`、`synced_at INTEGER`
+   （記得走 idempotent migration，見 §6.1）
+4. 在 [memory.js extractInsights](src/memory.js:158) 寫入本地成功後 fire-and-forget 同步
+5. （後續，讀方向）[search.js searchInsights](src/search.js:7) 命中不足時補查 gateway——
+   契約文檔已明確**先不做**，等本地 FTS5 不夠用再說
 
 ### 11.4 跨系統 ID 策略
-- co-reading 用 nanoid（21 字），URL-safe
-- 若 gateway 用自己的 ID 系統，建議：
-  - 本地 insights 永遠以 nanoid 為主 PK
-  - 加 `external_id TEXT UNIQUE` 對應 gateway ID
-  - 同步 conflict 時以 `updated_at` 較新者勝（last-write-wins）
+- 本地 insights 永遠以 nanoid（21 字，URL-safe）為主 PK
+- `external_ombre_id TEXT UNIQUE` 對應 Ombre 側 ID（由 gateway 端點回傳）
+- 同步 conflict 時以 `updated_at` 較新者勝（last-write-wins）——單向匯出下幾乎不會觸發
 
-### 11.5 注意事項
+### 11.5 注意事項（已升格為契約條款，見契約文檔 §五）
 - **不要把 messages 全量同步到外部**：原始對話可能含敏感推測或半成品，蒸餾後的 insights 才是正式記憶
-- **source_context 是來源證據**：整合時保留這個欄位，否則洞察脫離上下文後可信度下降
-- **dimension 是 co-reading 特定的 ontology**：六維分類（概念/延伸/你的研究/闪回/共振/悬题）外部系統未必對齊，建議在同步時保留原 dimension 並加 mapping 層
+- **source_context 是來源證據**：同步時必帶，否則洞察脫離上下文後可信度下降
+- **dimension 是 co-reading 特定的 ontology**：同步時原 dimension 進 `dim:` tag 保留，
+  Ombre 側粗類型映射只在 gateway 端點裡做，調整映射不需要動 co-reading
 
 ---
 
@@ -504,7 +496,52 @@ DELETE /memory/insights/:id
 
 ---
 
-## 14. 參考檔案索引
+## 14. 已知問題追蹤（依重要程度）
+
+> 2026-07 debug session 整理。含已修復項目（供未來回溯改動原因）與待決策項目（含已否決的方案與理由，避免重複評估）。
+
+### 14.1 已修復
+
+| 問題 | 根因 | 修法 | 位置 |
+|------|------|------|------|
+| 開啟論文後閒置一段時間會跳回首頁 | `App.jsx` 的 `page`/`paperId` 只存在 React state，沒有任何持久化；一旦發生整頁 reload（瀏覽器分頁休眠、renderer 重載等，觸發源未完全定位），state 歸零回到預設的 `library` | `navigate()` 時把 `{page, paperId}` 寫入 `sessionStorage`，`App` mount 時讀回還原 | [App.jsx](frontend/src/App.jsx) |
+| 無全螢幕功能 | 未實作 | 用標準 Fullscreen API（`requestFullscreen`/`exitFullscreen`），header 加切換按鈕，`fullscreenchange` 事件同步圖示狀態。Electron 預設會把 HTML5 fullscreen 映射成原生視窗全螢幕，不需要額外 IPC/preload | [App.jsx](frontend/src/App.jsx) |
+
+### 14.2 P1 — 待決策（已知問題，尚未修，需要使用者決定是否投入）
+
+**PDF 原文選取只能靠系統剪貼簿，無法自動抓取選取文字**
+- 現象：[ChatPanel.jsx:471-488](frontend/src/components/ChatPanel.jsx#L471-488) 的「貼上原文提問」讀的是 `navigator.clipboard.readText()`，從第一版就是如此，不是退化。
+- 根因：[FullTextView.jsx:8-13](frontend/src/components/FullTextView.jsx#L8-13) 用 `<iframe src=".../pdf">` 直接嵌入，瀏覽器對 `application/pdf` 會用 Chromium 內建 PDF viewer 渲染——即使同源，外層 JS 也拿不到裡面的文字選取（`document.getSelection()` 讀不到），只能退而求其次讀剪貼簿，導致「忘記先 Cmd+C」時貼到的是舊剪貼簿內容。
+- 可行修法：把 PDF 渲染從原生 iframe viewer 換成 `pdf.js`/`react-pdf` 自繪文字層，選取事件就在自己的 DOM 裡，可直接 `window.getSelection()` 抓取。
+- 取捨：會失去原生 viewer 的縮放/搜尋/列印等免費功能，需自己補（可先不做，工作量中等，抓幾小時量級）。
+- 狀態：使用者已了解取捨，暫緩決定。
+
+### 14.3 P2 — 已確認、影響小（低優先）
+
+**PDF 抽取：作者/機構編號上標被拆成獨立行**
+- 現象：實測 [src/pdf.js](src/pdf.js)（`pdf-parse`）對三篇 Nature 系列論文的抽取結果，作者名後的機構編號上標（如 `Horacio Cabral <newline> 1,5`）被拆到獨立一行，跟人名斷開。
+- 根因：`pdf-parse`／`pdfjs` 預設文字抽取用 Y 座標跳動判斷換行，上標的垂直偏移被誤判成換行，沒有專門的上標偵測。
+- 影響評估：**只出現在論文最前面的作者資訊區塊**，不影響正文。對 AI 通讀（`analyzePaper(paper.full_text)`，見 [papers.js:82](src/routes/papers.js#L82)）幾乎沒有影響，LLM 對這類 metadata 雜訊容忍度高；主要只影響人眼直接讀 raw 抽取文字時的觀感。
+- 可行修法：不用 `pdf-parse`，改直接用 `pdfjs-dist` 拿每個文字區塊的座標＋字體大小，用「小字體＋垂直偏移＋緊跟在文字後」的特徵判斷是上標，接回原句而非另起一行。
+- 狀態：優先度低，暫不修。
+
+### 14.4 P3 — 理論風險、尚未實測到，待觀察
+
+以下是 naive PDF 文字抽取的已知失敗模式，**目前手上三篇論文皆未觸發**，記錄下來是為了「哪天真的遇到再回來對照」，不建議預先加工：
+
+| 風險 | 說明 | 實測結果 |
+|------|------|---------|
+| 雙欄內文交錯亂序 | 若 content stream 順序沒有照欄位分組，正文段落可能被拼接錯，直接影響 AI 通讀理解品質（比上標問題嚴重，因為會動到正文） | 已用 [w6zqpypAHSY6FLM2s5KXX.pdf](data/pdfs/w6zqpypAHSY6FLM2s5KXX.pdf) 隔了約 2500 字的兩段落抽取結果人工核對，段落完全連貫、無交錯——Nature 排版的 content stream 本身就是按欄位順序寫入，pdfjs 預設抽取剛好是對的 |
+| Preview 版水印文字混入內文 | 出版社水印通常是旋轉貼圖/文字，若被當成一般文字抽取，可能夾雜進段落中間，污染 AI 通讀輸入 | 目前 library 三篇都是正式排版無水印版本，**沒有樣本可測**；水印通常是旋轉貼上去的，理論上可用 PDF 座標矩陣的旋轉分量偵測並過濾，但沒有實際檔案前無法驗證做法是否有效 |
+| 非制式排版 PDF（單欄 preprint、轉檔工具產出）格式差異 | 上標偵測/雙欄判斷若寫死假設（例如「一定是兩欄」），套到單欄 preprint 反而可能把好好的文字切壞；不同引用格式（行內 `[12]` vs 真上標）失敗模式也不同 | 未實測，需要拿到實際檔案才能驗證 |
+| 字型 subset 編碼錯誤 | 部分 PDF 產生工具的字型沒有正確 ToUnicode 對應表，會直接導致字元抽取錯誤/亂碼，這是完全不同類型的失敗（編碼問題，不是版面判斷問題），上標/欄位修法救不了 | 未實測 |
+| Grobid（學術 PDF 專用結構化解析）評估 | 品質遠高於自寫規則，但官方建議至少 4GB RAM 給 JVM，完整版（含 DeLFT 深度學習模型）Docker image 磁碟佔用 5-6GB，且需常駐背景服務 | **已評估並否決**——對單用戶本地閱讀工具代價不成比例，除非未來需求變成「準確結構化引用/圖表資料庫」等級才值得重新評估 |
+
+> 設計原則（供未來接手者參考）：規則式 PDF 抽取沒有「完美解」，只有「常見情況抓對、不確定時不要更糟」。任何修法都應該基於幾何量測（字體大小分佈、x 座標分群、旋轉角度）動態判斷，不要寫死特定出版社/排版模板；判斷信心不足時保留原始抽取結果，不要為了「智慧修正」把本來還能讀的文字弄得更亂。原生 PDF iframe（[FullTextView.jsx](frontend/src/components/FullTextView.jsx)）永遠是備援閱讀路徑，抽取文字只是加分的乾淨閱讀模式，不是唯一入口。
+
+---
+
+## 15. 參考檔案索引
 
 | 主題 | 檔案 |
 |------|------|
