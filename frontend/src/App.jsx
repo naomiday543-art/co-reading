@@ -8,9 +8,23 @@ import PaperDetail from './pages/PaperDetail';
 import Settings from './pages/Settings';
 import InsightsPanel from './components/InsightsPanel';
 
+const NAV_STORAGE_KEY = 'co-reading:nav';
+
+function loadStoredNav() {
+  try {
+    const raw = sessionStorage.getItem(NAV_STORAGE_KEY);
+    if (!raw) return { page: 'library', paperId: null };
+    return JSON.parse(raw);
+  } catch {
+    return { page: 'library', paperId: null };
+  }
+}
+
 export default function App() {
-  const [page, setPage] = useState('library');
-  const [paperId, setPaperId] = useState(null);
+  const initialNav = loadStoredNav();
+  const [page, setPage] = useState(initialNav.page);
+  const [paperId, setPaperId] = useState(initialNav.paperId);
+  const [isFullscreen, setIsFullscreen] = useState(!!document.fullscreenElement);
   const { setPapers, setTags, setTree, uploading } = useStore();
 
   const loadData = async () => {
@@ -33,6 +47,21 @@ export default function App() {
   const navigate = (p, id) => {
     setPage(p);
     setPaperId(id || null);
+    sessionStorage.setItem(NAV_STORAGE_KEY, JSON.stringify({ page: p, paperId: id || null }));
+  };
+
+  useEffect(() => {
+    const onFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      document.documentElement.requestFullscreen();
+    }
   };
 
   return (
@@ -56,16 +85,33 @@ export default function App() {
             Co-Reading
           </h1>
         </div>
-        <button
-          onClick={() => navigate('settings')}
-          className={`p-2 rounded-lg hover:bg-gray-100 ${page === 'settings' ? 'bg-gray-100' : ''}`}
-          title="設定"
-        >
-          <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={toggleFullscreen}
+            className="p-2 rounded-lg hover:bg-gray-100"
+            title={isFullscreen ? '離開全螢幕' : '全螢幕'}
+          >
+            {isFullscreen ? (
+              <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M15 9h4.5M15 9V4.5M15 9l5.25-5.25M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4.5A.5.5 0 014.5 4H8m8 0h3.5a.5.5 0 01.5.5V8m0 8v3.5a.5.5 0 01-.5.5H16m-8 0H4.5a.5.5 0 01-.5-.5V16" />
+              </svg>
+            )}
+          </button>
+          <button
+            onClick={() => navigate('settings')}
+            className={`p-2 rounded-lg hover:bg-gray-100 ${page === 'settings' ? 'bg-gray-100' : ''}`}
+            title="設定"
+          >
+            <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </button>
+        </div>
       </header>
 
       {/* Body */}
