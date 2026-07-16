@@ -243,8 +243,9 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
 
   return (
     <div className="flex flex-col h-full">
-      <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
-        跟 AI 討論這篇論文
+      <h3 className="cr-serif text-sm font-semibold text-text-strong mb-2 flex items-center gap-2">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="text-accent"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+        討論
       </h3>
 
       {/* Messages */}
@@ -272,7 +273,7 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
                 className="chat-bubble-user p-3 text-sm max-w-[85%] ml-auto"
               >
                 <textarea
-                  className="w-full min-h-[60px] max-h-[200px] border border-gray-300 rounded-lg p-2 text-sm resize-y focus:outline-none focus:ring-1 focus:ring-primary"
+                  className="w-full min-h-[60px] max-h-[200px] border border-border bg-surface rounded-lg p-2 text-sm resize-y focus:outline-none focus:border-accent"
                   value={editContent}
                   onChange={e => setEditContent(e.target.value)}
                   onKeyDown={e => {
@@ -287,14 +288,14 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
                 />
                 <div className="flex gap-2 mt-1.5">
                   <button
-                    className="px-3 py-1 text-xs bg-primary text-white rounded-md hover:bg-primary/90"
+                    className="px-3 py-1 text-xs bg-accent text-accent-fg rounded-md hover:bg-accent-hover"
                     onClick={() => handleSaveEdit(msg.id)}
                     disabled={streaming}
                   >
                     保存
                   </button>
                   <button
-                    className="px-3 py-1 text-xs border border-gray-300 rounded-md hover:bg-gray-50"
+                    className="px-3 py-1 text-xs border border-border rounded-md hover:bg-surface-hover"
                     onClick={handleCancelEdit}
                   >
                     取消
@@ -314,9 +315,11 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
             >
               {!isUser ? (
                 <div>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {msg.content}
-                  </ReactMarkdown>
+                  <div className="prose-chat">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {msg.content}
+                    </ReactMarkdown>
+                  </div>
                   <div className="flex items-center gap-1 mt-1.5 flex-wrap">
                     {/* Version navigation */}
                     {hasVersions && (
@@ -327,7 +330,7 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
                         >
                           ‹
                         </span>
-                        <span className="font-mono text-[10px] opacity-40 min-w-[22px] text-center">
+                        <span className="cr-mono text-[10px] opacity-40 min-w-[22px] text-center">
                           {(msg.regen_idx ?? 0) + 1}/{msg.regen_versions.length}
                         </span>
                         <span
@@ -342,7 +345,7 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
                     {/* Regenerate button — only on last AI */}
                     {isLastAI && (
                       <button
-                        className="text-xs text-gray-400 hover:text-primary px-1.5 py-0.5 rounded-md hover:bg-gray-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="text-xs text-faint hover:text-accent px-1.5 py-0.5 rounded-md hover:bg-surface-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         onClick={handleRegenerate}
                         disabled={streaming}
                         title="重新生成回覆"
@@ -354,7 +357,7 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
                     {/* Save as insight */}
                     {onSaveInsight && (
                       <button
-                        className="text-xs text-gray-400 hover:text-primary flex items-center gap-0.5 px-1.5 py-0.5 rounded-md hover:bg-gray-100 transition-colors"
+                        className="text-xs text-faint hover:text-accent flex items-center gap-0.5 px-1.5 py-0.5 rounded-md hover:bg-surface-hover transition-colors"
                         onClick={onSaveInsight}
                         title="將這段回覆存為洞察"
                       >
@@ -367,12 +370,12 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
                 <div>
                   <p className="whitespace-pre-wrap">{msg.content}</p>
                   {msg.edited ? (
-                    <span className="text-[10px] text-gray-400 ml-1">(已編輯)</span>
+                    <span className="text-[10px] text-muted ml-1">(已編輯)</span>
                   ) : null}
                   <div className="flex items-center gap-1 mt-1">
                     {/* Edit button — dimmed by default, prominent on hover (visible on touch) */}
                     <button
-                      className="text-xs text-gray-400 hover:text-primary opacity-40 group-hover:opacity-100 px-1.5 py-0.5 rounded-md hover:bg-gray-100 transition-all"
+                      className="text-xs text-muted hover:text-accent opacity-50 group-hover:opacity-100 px-1.5 py-0.5 rounded-md hover:bg-surface-hover transition-all"
                       onClick={() => handleStartEdit(msg.id)}
                       disabled={streaming}
                       title="編輯消息"
@@ -387,24 +390,24 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
                         ref={showBranchesFor === msg.id ? branchDropdownRef : null}
                       >
                         <button
-                          className="text-xs text-gray-400 hover:text-primary px-1.5 py-0.5 rounded-md hover:bg-gray-100 transition-colors"
+                          className="text-xs text-muted hover:text-accent px-1.5 py-0.5 rounded-md hover:bg-surface-hover transition-colors"
                           onClick={() => setShowBranchesFor(showBranchesFor === msg.id ? null : msg.id)}
                         >
                           編輯歷史 ({msg.edit_branches.length})
                         </button>
                         {showBranchesFor === msg.id && (
-                          <div className="absolute left-0 top-6 bg-white border border-gray-200 rounded-md shadow-lg z-20 py-1 text-xs w-64 max-h-48 overflow-y-auto">
+                          <div className="absolute left-0 top-6 bg-surface border border-border rounded-lg shadow-lg z-20 py-1 text-xs w-64 max-h-48 overflow-y-auto">
                             {msg.edit_branches.map(b => (
                               <button
                                 key={b.id}
-                                className="block w-full text-left px-3 py-1.5 hover:bg-gray-100 border-b border-gray-50 last:border-0"
+                                className="block w-full text-left px-3 py-1.5 hover:bg-surface-hover border-b border-border-soft last:border-0"
                                 onClick={() => handleSwitchBranch(msg.id, b.id)}
                               >
-                                <div className="text-gray-700 truncate">
+                                <div className="text-text truncate">
                                   {b.original_content ? b.original_content.slice(0, 40) : '(空)'}
                                   {b.original_content && b.original_content.length > 40 ? '...' : ''}
                                 </div>
-                                <div className="text-gray-400 mt-0.5">
+                                <div className="text-faint mt-0.5">
                                   {b.tail_count != null ? `${b.tail_count} 條後續消息` : ''}
                                   {b.ts ? ` · ${new Date(b.ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : ''}
                                 </div>
@@ -425,21 +428,23 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
         {streaming && (
           <div className="chat-bubble-ai p-3 text-sm max-w-[85%]">
             {streamingContent ? (
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {streamingContent}
-              </ReactMarkdown>
+              <div className="prose-chat">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {streamingContent}
+                </ReactMarkdown>
+              </div>
             ) : (
               <div className="flex gap-1">
-                <span className="w-2 h-2 bg-gray-400 rounded-full typing-dot" />
-                <span className="w-2 h-2 bg-gray-400 rounded-full typing-dot" />
-                <span className="w-2 h-2 bg-gray-400 rounded-full typing-dot" />
+                <span className="w-2 h-2 bg-faint rounded-full typing-dot" />
+                <span className="w-2 h-2 bg-faint rounded-full typing-dot" />
+                <span className="w-2 h-2 bg-faint rounded-full typing-dot" />
               </div>
             )}
           </div>
         )}
 
         {error && (
-          <div className="p-2 text-sm text-red-600 bg-red-50 rounded-lg">
+          <div className="p-2.5 text-sm text-danger bg-surface-alt border border-border-soft rounded-lg">
             {error}
           </div>
         )}
@@ -452,24 +457,24 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
         <div className="flex gap-2">
           <textarea
             ref={inputRef}
-            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-primary"
+            className="flex-1 border border-border bg-surface rounded-2xl px-4 py-2.5 text-sm resize-none shadow-sm focus:outline-none focus:border-accent"
             rows={2}
-            placeholder="輸入你的問題... (Enter 發送，Shift+Enter 換行)"
+            placeholder="追問，或貼上一段原文一起讀…（Enter 送出，Shift+Enter 換行）"
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             disabled={streaming}
           />
           <button
-            className="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+            className="px-4 py-2 bg-accent text-accent-fg rounded-xl text-sm font-medium hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
             onClick={handleSend}
             disabled={streaming || !input.trim()}
           >
-            發送
+            送出
           </button>
         </div>
         <button
-          className="text-xs text-gray-500 hover:text-primary flex items-center gap-1 px-1 transition-colors"
+          className="text-xs text-muted hover:text-accent flex items-center gap-1 px-1 transition-colors"
           onClick={async () => {
             try {
               const text = await navigator.clipboard.readText();
@@ -491,7 +496,7 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
         {messages.length >= 2 && (
           <div className="flex items-center gap-2">
             <button
-              className="text-xs text-gray-500 hover:text-primary flex items-center gap-1 px-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="text-xs text-muted hover:text-accent flex items-center gap-1 px-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={handleExtract}
               disabled={extracting}
               title="從討論中自動提取洞察"
@@ -499,7 +504,7 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
               {extracting ? '… 提取中...' : '提取洞察'}
             </button>
             {extractResult && (
-              <span className="text-xs text-green-600">
+              <span className="text-xs text-fact">
                 新增 {extractResult.insights.length} 條洞察
                 {extractResult.skipped > 0 && `（${extractResult.skipped} 條進度已跳過）`}
               </span>
