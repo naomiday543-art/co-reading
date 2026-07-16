@@ -146,26 +146,27 @@ export default function Settings() {
 
   return (
     <div className="max-w-2xl mx-auto">
-      <h2 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">設定</h2>
+      <h2 className="cr-serif text-2xl font-semibold text-text-strong mb-1">設定</h2>
+      <p className="text-[13.5px] text-muted mb-6">API、模型、外觀。所有變更即時保存到本機。</p>
 
-      <div className="space-y-4">
+      <div className="space-y-5">
         {/* API Key */}
-        <div>
-          <h3 className="text-sm font-semibold text-gray-700 mb-2">API Key</h3>
-          <p className="text-sm text-gray-500 mb-2">
-            填入你的 API Key 即可開始使用。
+        <div className="card p-6">
+          <h3 className="cr-serif text-[17px] font-semibold text-text-strong mb-1">API Key</h3>
+          <p className="text-[12.5px] text-muted mb-3">
+            填入你的 API Key 即可開始使用。API key 僅保存在本機，不會上傳。
           </p>
 
           {/* Provider selector */}
           <div className="flex flex-wrap gap-2 mb-3">
             {Object.entries(providerInfo).map(([k, v]) => (
-              <label key={k} className="flex items-center gap-1.5 text-sm cursor-pointer">
+              <label key={k} className="flex items-center gap-1.5 text-sm cursor-pointer text-text">
                 <input
                   type="radio"
                   name="provider"
                   checked={provider === k}
                   onChange={() => handleProviderChange(k)}
-                  className="text-primary"
+                  className="accent-[var(--accent)]"
                 />
                 {v.label}
               </label>
@@ -176,7 +177,7 @@ export default function Settings() {
           <div className="mb-2">
             <input
               type="password"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+              className="w-full border border-border bg-surface-alt rounded-[10px] px-3 py-2 text-sm cr-mono focus:outline-none focus:border-accent"
               placeholder="在此貼入你的 API Key"
               value={apiKey}
               onChange={e => setApiKey(e.target.value)}
@@ -184,20 +185,20 @@ export default function Settings() {
           </div>
 
           {providerInfo[provider]?.url && (
-            <p className="text-xs text-gray-400 mb-3">
-              前往 <a href={`https://${providerInfo[provider].url}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{providerInfo[provider].url}</a> 申請 API Key
+            <p className="text-xs text-faint mb-3">
+              前往 <a href={`https://${providerInfo[provider].url}`} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">{providerInfo[provider].url}</a> 申請 API Key
             </p>
           )}
 
           <div className="flex items-center gap-3 mb-3">
             <button
-              className="px-4 py-1.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+              className="px-4 py-2 bg-accent text-accent-fg rounded-[10px] text-sm font-medium hover:bg-accent-hover disabled:opacity-50 shadow-sm"
               onClick={saveSettings}
             >
               儲存
             </button>
             <button
-              className="px-4 py-1.5 border border-gray-300 rounded-lg text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+              className="px-4 py-2 border border-border rounded-[10px] text-sm text-text hover:bg-surface-hover disabled:opacity-50"
               onClick={handleTest}
               disabled={testing || !apiKey}
             >
@@ -206,31 +207,31 @@ export default function Settings() {
           </div>
 
           {status && (
-            <p className={`text-sm ${status.ok ? 'text-green-600' : 'text-red-500'}`}>
+            <p className={`text-sm ${status.ok ? 'text-fact' : 'text-danger'}`}>
               {status.ok ? '✓ ' : '✕ '}{status.message}
             </p>
           )}
         </div>
 
         {/* Advanced settings */}
-        <div className="border-t border-gray-200 pt-4">
+        <div className="card p-6">
           <button
-            className="text-sm text-gray-600 hover:text-gray-800 font-medium"
+            className="text-sm text-text hover:text-text-strong font-medium"
             onClick={toggleAdvanced}
           >
             {advancedOpen ? '▾' : '▸'} 進階設定（使用其他 AI 服務）
           </button>
 
           {advancedOpen && (
-            <div className="mt-3 space-y-4 pl-4 border-l-2 border-gray-100">
+            <div className="mt-3 space-y-4 pl-4 border-l-2 border-border-soft">
               {/* Chat model */}
               <div>
-                <h4 className="text-sm font-medium text-gray-700 mb-2">討論用模型</h4>
+                <h4 className="text-sm font-medium text-text-strong mb-2">討論用模型</h4>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-xs text-gray-500">API 格式</label>
+                    <label className="text-xs text-muted">API 格式</label>
                     <select
-                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
+                      className="w-full border border-border bg-surface-alt rounded-[10px] px-2 py-1.5 text-sm mt-0.5"
                       value={chatFormat}
                       onChange={e => setChatFormat(e.target.value)}
                     >
@@ -239,18 +240,18 @@ export default function Settings() {
                     </select>
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500">Model</label>
+                    <label className="text-xs text-muted">Model</label>
                     <input
-                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
+                      className="w-full border border-border bg-surface-alt rounded-[10px] px-2 py-1.5 text-sm mt-0.5 cr-mono"
                       value={chatModel}
                       onChange={e => setChatModel(e.target.value)}
                       placeholder="claude-sonnet-4-6"
                     />
                   </div>
                   <div className="col-span-2">
-                    <label className="text-xs text-gray-500">Base URL</label>
+                    <label className="text-xs text-muted">Base URL</label>
                     <input
-                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
+                      className="w-full border border-border bg-surface-alt rounded-[10px] px-2 py-1.5 text-sm mt-0.5 cr-mono"
                       value={chatBaseUrl}
                       onChange={e => setChatBaseUrl(e.target.value)}
                       placeholder="https://api.anthropic.com/v1"
@@ -261,12 +262,12 @@ export default function Settings() {
 
               {/* Analyze model */}
               <div>
-                <h4 className="text-sm font-medium text-gray-700 mb-2">通讀用模型（可選）</h4>
+                <h4 className="text-sm font-medium text-text-strong mb-2">通讀用模型（可選）</h4>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-xs text-gray-500">API 格式</label>
+                    <label className="text-xs text-muted">API 格式</label>
                     <select
-                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
+                      className="w-full border border-border bg-surface-alt rounded-[10px] px-2 py-1.5 text-sm mt-0.5"
                       value={analyzeFormat}
                       onChange={e => setAnalyzeFormat(e.target.value)}
                     >
@@ -275,28 +276,28 @@ export default function Settings() {
                     </select>
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500">Model</label>
+                    <label className="text-xs text-muted">Model</label>
                     <input
-                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
+                      className="w-full border border-border bg-surface-alt rounded-[10px] px-2 py-1.5 text-sm mt-0.5 cr-mono"
                       value={analyzeModel}
                       onChange={e => setAnalyzeModel(e.target.value)}
                       placeholder="deepseek-chat"
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500">Base URL</label>
+                    <label className="text-xs text-muted">Base URL</label>
                     <input
-                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
+                      className="w-full border border-border bg-surface-alt rounded-[10px] px-2 py-1.5 text-sm mt-0.5 cr-mono"
                       value={analyzeBaseUrl}
                       onChange={e => setAnalyzeBaseUrl(e.target.value)}
                       placeholder="https://api.deepseek.com/v1"
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500">API Key（留空則使用上方）</label>
+                    <label className="text-xs text-muted">API Key（留空則使用上方）</label>
                     <input
                       type="password"
-                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
+                      className="w-full border border-border bg-surface-alt rounded-[10px] px-2 py-1.5 text-sm mt-0.5 cr-mono"
                       value={analyzeApiKey}
                       onChange={e => setAnalyzeApiKey(e.target.value)}
                       placeholder="留空 = 使用主 API Key"
@@ -309,24 +310,24 @@ export default function Settings() {
         </div>
 
         {/* Running logs */}
-        <div className="border-t border-gray-200 pt-4">
+        <div className="card p-6">
           <button
-            className="text-sm text-gray-600 hover:text-gray-800 font-medium"
+            className="text-sm text-text hover:text-text-strong font-medium"
             onClick={loadLogs}
           >
             運行日誌 {showLogs ? '▾' : '▸'}
           </button>
 
           {showLogs && (
-            <div className="mt-2">
-              <div className="bg-gray-900 text-gray-300 rounded-lg p-3 text-xs font-mono max-h-64 overflow-y-auto">
+            <div className="mt-3">
+              <div className="bg-[#1B1815] text-[#EDE6D6] rounded-lg p-3 text-xs cr-mono max-h-64 overflow-y-auto">
                 {logs.length === 0 ? (
-                  <p className="text-gray-500">尚無日誌</p>
+                  <p className="text-faint">尚無日誌</p>
                 ) : (
                   logs.map((line, i) => (
                     <div
                       key={i}
-                      className={`${line.includes('[ERROR]') ? 'text-red-400' : 'text-gray-400'}`}
+                      className={`${line.includes('[ERROR]') ? 'text-danger' : 'text-muted'}`}
                     >
                       {line}
                     </div>
@@ -335,7 +336,7 @@ export default function Settings() {
               </div>
               <div className="flex gap-2 mt-2">
                 <button
-                  className="text-xs text-gray-500 hover:text-gray-700"
+                  className="text-xs text-muted hover:text-text-strong"
                   onClick={async () => {
                     try { const data = await logsApi.get(100); setLogs(data.logs || []); } catch {}
                   }}
@@ -348,8 +349,8 @@ export default function Settings() {
         </div>
 
         {/* Save note about settings storage */}
-        <div className="border-t border-gray-200 pt-3">
-          <p className="text-xs text-gray-400">
+        <div className="pt-1">
+          <p className="text-xs text-faint">
             API Key 儲存在瀏覽器本地儲存（localStorage），不會上傳到任何服務器。後端透過 SQLite 的 settings 表讀取配置。
           </p>
         </div>

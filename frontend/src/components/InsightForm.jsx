@@ -47,27 +47,27 @@ export default function InsightForm({ insight, papers, onSave, onCancel }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onCancel}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onCancel}>
       <form
-        className="bg-white rounded-xl shadow-xl p-5 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto"
+        className="bg-surface border border-border-soft rounded-2xl shadow-lg p-6 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto"
         onClick={e => e.stopPropagation()}
         onSubmit={handleSubmit}
       >
-        <h3 className="text-lg font-semibold text-gray-800 mb-4">
+        <h3 className="cr-serif text-lg font-semibold text-text-strong mb-4">
           {insight ? '編輯洞察' : '新建洞察'}
         </h3>
 
         {/* Dimension */}
-        <label className="block text-sm font-medium text-gray-700 mb-1">維度</label>
+        <label className="block text-sm font-medium text-muted mb-1.5">維度</label>
         <div className="flex flex-wrap gap-1.5 mb-3">
           {DIMENSIONS.map(d => (
             <button
               key={d}
               type="button"
-              className={`text-xs px-2 py-1 rounded-full border transition-colors ${
+              className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
                 dimension === d
-                  ? 'bg-primary text-white border-primary'
-                  : 'border-gray-300 text-gray-600 hover:border-gray-400'
+                  ? 'bg-accent-soft text-accent border-transparent font-medium'
+                  : 'border-border text-muted hover:bg-surface-hover'
               }`}
               onClick={() => setDimension(d)}
             >
@@ -77,9 +77,9 @@ export default function InsightForm({ insight, papers, onSave, onCancel }) {
         </div>
 
         {/* Title */}
-        <label className="block text-sm font-medium text-gray-700 mb-1">標題</label>
+        <label className="block text-sm font-medium text-muted mb-1.5">標題</label>
         <input
-          className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm mb-3 focus:outline-none focus:ring-1 focus:ring-primary"
+          className="w-full border border-border bg-surface-alt rounded-[10px] px-3 py-2 text-sm mb-3 focus:outline-none focus:border-accent"
           placeholder="一句話概括..."
           value={title}
           onChange={e => setTitle(e.target.value)}
@@ -87,28 +87,28 @@ export default function InsightForm({ insight, papers, onSave, onCancel }) {
         />
 
         {/* Content */}
-        <label className="block text-sm font-medium text-gray-700 mb-1">內容</label>
+        <label className="block text-sm font-medium text-muted mb-1.5">內容</label>
         <textarea
-          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mb-3 resize-y min-h-[120px] focus:outline-none focus:ring-1 focus:ring-primary"
+          className="w-full border border-border bg-surface-alt rounded-[10px] px-3 py-2 text-sm mb-3 resize-y min-h-[120px] focus:outline-none focus:border-accent"
           placeholder="詳細描述這個洞察..."
           value={content}
           onChange={e => setContent(e.target.value)}
         />
 
         {/* Source context */}
-        <label className="block text-sm font-medium text-gray-700 mb-1">來源上下文（可選）</label>
+        <label className="block text-sm font-medium text-muted mb-1.5">來源上下文（可選）</label>
         <input
-          className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm mb-3 focus:outline-none focus:ring-1 focus:ring-primary"
+          className="w-full border border-border bg-surface-alt rounded-[10px] px-3 py-2 text-sm mb-3 focus:outline-none focus:border-accent"
           placeholder="例如：討論 Methods 段落時產生..."
           value={sourceContext}
           onChange={e => setSourceContext(e.target.value)}
         />
 
         {/* Source paper */}
-        <label className="block text-sm font-medium text-gray-700 mb-1">來源論文（可選）</label>
+        <label className="block text-sm font-medium text-muted mb-1.5">來源論文（可選）</label>
         <div className="relative mb-4">
           <input
-            className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+            className="w-full border border-border bg-surface-alt rounded-[10px] px-3 py-2 text-sm focus:outline-none focus:border-accent"
             placeholder="搜尋論文..."
             value={paperSearch}
             onChange={e => {
@@ -120,13 +120,13 @@ export default function InsightForm({ insight, papers, onSave, onCancel }) {
             onBlur={() => setTimeout(() => setShowPaperDropdown(false), 200)}
           />
           {selectedPaper && sourcePaperId && (
-            <p className="text-xs text-gray-500 mt-0.5">已選：{selectedPaper.title || selectedPaper.pdf_filename}</p>
+            <p className="text-xs text-muted mt-1">已選：{selectedPaper.title || selectedPaper.pdf_filename}</p>
           )}
           {showPaperDropdown && filteredPapers.length > 0 && (
-            <div className="absolute left-0 top-full mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg z-30 py-1 max-h-40 overflow-y-auto">
+            <div className="absolute left-0 top-full mt-1 w-full bg-surface border border-border rounded-lg shadow-lg z-30 py-1 max-h-40 overflow-y-auto">
               <button
                 type="button"
-                className="block w-full text-left px-3 py-1.5 text-sm text-gray-500 hover:bg-gray-100"
+                className="block w-full text-left px-3 py-1.5 text-sm text-muted hover:bg-surface-hover"
                 onClick={() => {
                   setSourcePaperId('');
                   setPaperSearch('');
@@ -139,7 +139,7 @@ export default function InsightForm({ insight, papers, onSave, onCancel }) {
                 <button
                   key={p.id}
                   type="button"
-                  className="block w-full text-left px-3 py-1.5 text-sm hover:bg-gray-100"
+                  className="block w-full text-left px-3 py-1.5 text-sm hover:bg-surface-hover"
                   onClick={() => {
                     setSourcePaperId(p.id);
                     setPaperSearch(p.title || p.pdf_filename || '');
@@ -157,14 +157,14 @@ export default function InsightForm({ insight, papers, onSave, onCancel }) {
         <div className="flex justify-end gap-2">
           <button
             type="button"
-            className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+            className="px-4 py-2 text-sm text-muted border border-border hover:bg-surface-hover rounded-[10px]"
             onClick={onCancel}
           >
             取消
           </button>
           <button
             type="submit"
-            className="px-4 py-1.5 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 disabled:opacity-50"
+            className="px-4 py-2 text-sm bg-accent text-accent-fg rounded-[10px] font-medium hover:bg-accent-hover disabled:opacity-50 shadow-sm"
             disabled={saving || !title.trim() || !content.trim()}
           >
             {saving ? '儲存中...' : '儲存'}

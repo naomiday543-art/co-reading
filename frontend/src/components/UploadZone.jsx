@@ -36,7 +36,7 @@ export default function UploadZone({ onUploaded }) {
 
   return (
     <div
-      className={`border-t-2 border-dashed transition-colors ${dragOver ? 'border-primary bg-primary/5' : 'border-gray-300 bg-gray-50'}`}
+      className={`cr-uploadzone m-6 mt-0 rounded-xl border-[1.5px] border-dashed transition-colors ${dragOver ? 'border-accent bg-accent-soft' : 'border-border bg-surface-alt'}`}
       onDragOver={e => { e.preventDefault(); setDragOver(true); }}
       onDragLeave={() => setDragOver(false)}
       onDrop={e => {
@@ -46,20 +46,23 @@ export default function UploadZone({ onUploaded }) {
       }}
       onClick={() => fileInputRef.current?.click()}
     >
-      <div className="flex items-center justify-center py-3 px-4 cursor-pointer">
+      <div className="flex items-center justify-center gap-3.5 py-4 px-5 cursor-pointer">
         {uploading ? (
           <div className="flex flex-wrap gap-3">
             {progress.map((p, i) => (
-              <div key={i} className="flex items-center gap-2 text-sm text-gray-600">
+              <div key={i} className="flex items-center gap-2 text-sm text-muted">
                 <span>{p.status === 'uploading' ? '…' : p.status === 'done' ? '✓' : '✕'}</span>
                 <span className="truncate max-w-[200px]">{p.name}</span>
               </div>
             ))}
           </div>
         ) : (
-          <p className="text-sm text-gray-500">
-            將 PDF 拖拽到此處上傳，或 <span className="text-primary hover:underline">點擊選擇文件</span>
-          </p>
+          <>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-faint"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M17 8l-5-5-5 5" /><path d="M12 3v12" /></svg>
+            <p className="text-[13px] text-muted">
+              將 PDF 拖拽到此處上傳，或 <span className="text-accent hover:underline">點擊選擇文件</span> · 支援批次匯入
+            </p>
+          </>
         )}
       </div>
       <input

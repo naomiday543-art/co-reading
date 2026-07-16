@@ -4,41 +4,178 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Co-Reading — AI 論文共讀</title>
+
+    <!-- Self-hosted fonts (Geist / Geist Mono / Source Serif 4, latin subset).
+         Chinese falls back through the system chain (Noto/PingFang/YaHei). No CDN fonts. -->
+    <link rel="stylesheet" href="/fonts/fonts.css" />
+
+    <!-- Set theme before first paint so there is no flash. -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('co-reading:theme');
+          var theme = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          document.documentElement.setAttribute('data-theme', theme);
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'light');
+        }
+      })();
+    </script>
+
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
+      // Map the Research Gateway design tokens (CSS variables) into Tailwind.
+      // Because the values are CSS variables that flip under [data-theme="dark"],
+      // every token utility (bg-surface, text-muted, …) is automatically theme-aware
+      // with no dark: variants needed.
       tailwind.config = {
         theme: {
           extend: {
             colors: {
-              primary: '#2F3437',
+              // primary kept as an alias of --accent so existing text-primary/bg-primary
+              // classes resolve to the terracotta accent.
+              primary: 'var(--accent)',
+              accent: 'var(--accent)',
+              'accent-hover': 'var(--accent-hover)',
+              'accent-soft': 'var(--accent-soft)',
+              'accent-fg': 'var(--accent-fg)',
+              bg: 'var(--bg)',
+              'bg-tint': 'var(--bg-tint)',
+              surface: 'var(--surface)',
+              'surface-alt': 'var(--surface-alt)',
+              'surface-hover': 'var(--surface-hover)',
+              text: 'var(--text)',
+              'text-strong': 'var(--text-strong)',
+              muted: 'var(--muted)',
+              faint: 'var(--faint)',
+              border: 'var(--border)',
+              'border-soft': 'var(--border-soft)',
+              fact: 'var(--fact)',
+              'fact-soft': 'var(--fact-soft)',
+              hyp: 'var(--hyp)',
+              'hyp-soft': 'var(--hyp-soft)',
+              progress: 'var(--progress)',
+              'progress-soft': 'var(--progress-soft)',
+              danger: 'var(--danger)',
             },
             fontFamily: {
-              sans: ["-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],
-              mono: ["Menlo", "Monaco", "Consolas", "Liberation Mono", "Courier New", "monospace"],
+              sans: ['Geist', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', '-apple-system', 'Segoe UI', 'ui-sans-serif', 'sans-serif'],
+              serif: ['Source Serif 4', 'Noto Serif SC', 'Songti SC', 'Georgia', 'serif'],
+              mono: ['Geist Mono', 'ui-monospace', 'SF Mono', 'Menlo', 'monospace'],
+            },
+            boxShadow: {
+              sm: 'var(--shadow-sm)',
+              md: 'var(--shadow-md)',
+              lg: 'var(--shadow-lg)',
             },
           },
         },
       };
     </script>
+
     <style>
+      /* ===== Research Gateway design tokens (verbatim from styles.css) ===== */
+      :root {
+        --bg: #F5F1EB; --bg-tint: #EFE9DD; --surface: #FFFFFF; --surface-alt: #FAF6EC;
+        --surface-hover: #F2ECDE; --text: #2C2622; --text-strong: #1B1815; --muted: #6B6259;
+        --faint: #9A8F82; --border: #E5DDCC; --border-soft: #EFE8D8; --accent: #C96442;
+        --accent-hover: #B25837; --accent-soft: #F4DDCB; --accent-fg: #FFFFFF;
+        --fact: #6C8E7A; --fact-soft: #DFEAE0; --hyp: #B87A2E; --hyp-soft: #F1E1C6;
+        --progress: #6E7FA5; --progress-soft: #DDE2EF; --danger: #A6503E;
+        --shadow-sm: 0 1px 2px rgba(45, 32, 22, 0.04);
+        --shadow-md: 0 2px 8px rgba(45, 32, 22, 0.06), 0 1px 2px rgba(45, 32, 22, 0.04);
+        --shadow-lg: 0 12px 32px rgba(45, 32, 22, 0.08), 0 2px 6px rgba(45, 32, 22, 0.04);
+      }
+      [data-theme="dark"] {
+        --bg: #26221E; --bg-tint: #2E2A25; --surface: #302B26; --surface-alt: #363028;
+        --surface-hover: #3A342C; --text: #EDE6D6; --text-strong: #F7F1E2; --muted: #A79E8C;
+        --faint: #6E6558; --border: #45403A; --border-soft: #3B362F; --accent: #DA8666;
+        --accent-hover: #E39A7C; --accent-soft: #4A3529; --accent-fg: #1B1815;
+        --fact: #92B39F; --fact-soft: #3A4A40; --hyp: #D9A860; --hyp-soft: #4B3E28;
+        --progress: #9AA9C9; --progress-soft: #363E4F; --danger: #D48B7A;
+        --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
+        --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.28), 0 1px 2px rgba(0, 0, 0, 0.2);
+        --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.36), 0 2px 6px rgba(0, 0, 0, 0.24);
+      }
+
       * { box-sizing: border-box; margin: 0; padding: 0; }
-      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #2F3437; letter-spacing: -0.01em; }
-      .chat-bubble-user { background-color: #2F3437; color: #FFFFFF; border-radius: 8px 8px 2px 8px; }
-      .chat-bubble-ai { background-color: #F7F6F3; color: #2F3437; border-radius: 8px 8px 8px 2px; }
-      .card { border: 1px solid #EAEAEA; border-radius: 8px; transition: box-shadow 0.2s; }
-      .card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
-      .sidebar { background-color: #FBFBFA; }
+      html, body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: 'Geist', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', -apple-system, 'Segoe UI', ui-sans-serif, sans-serif;
+        font-size: 14px;
+        line-height: 1.7;
+        letter-spacing: -0.005em;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .cr-serif { font-family: 'Source Serif 4', 'Noto Serif SC', 'Songti SC', Georgia, serif; letter-spacing: -0.01em; }
+      .cr-mono { font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace; }
+
+      /* Chat bubbles — warm paper look, accent-soft user tail */
+      .chat-bubble-user { background: var(--accent-soft); color: var(--text-strong); border-radius: 14px 14px 4px 14px; }
+      .chat-bubble-ai { background: var(--surface); border: 1px solid var(--border-soft); color: var(--text); border-radius: 14px 14px 14px 4px; }
+
+      /* Card + hover lift */
+      .card { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 14px; box-shadow: var(--shadow-sm); transition: box-shadow 0.18s, border-color 0.18s; }
+      .card:hover { box-shadow: var(--shadow-md); border-color: var(--border); }
+
+      /* Animations from the prototype */
+      @keyframes cr-cursor { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+      @keyframes cr-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
       @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
       .typing-dot { animation: pulse-dot 1.4s infinite; }
       .typing-dot:nth-child(2) { animation-delay: 0.2s; }
       .typing-dot:nth-child(3) { animation-delay: 0.4s; }
-      pre { background: #F7F6F3; color: #2F3437; border: 1px solid #EAEAEA; padding: 0.75rem; border-radius: 6px; overflow-x: auto; font-size: 0.875rem; }
-      pre code { background: none; padding: 0; }
-      code { background: #F7F6F3; padding: 0.125rem 0.25rem; border-radius: 3px; font-size: 0.875em; }
-      blockquote { border-left: 2px solid #D3D1C7; padding-left: 1rem; color: #787774; margin: 0.5rem 0; }
+      .cr-pulse-dot { animation: cr-pulse 1.4s ease-in-out infinite; }
+
+      /* Markdown content inside chat */
+      .prose-chat p { margin: 0 0 10px; }
+      .prose-chat p:last-child { margin-bottom: 0; }
+      .prose-chat ul, .prose-chat ol { margin: 8px 0 10px; padding-left: 22px; }
+      .prose-chat li { margin-bottom: 4px; }
+      .prose-chat strong { color: var(--text-strong); font-weight: 600; }
+      .prose-chat code { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 0.88em; background: var(--surface-alt); border: 1px solid var(--border-soft); padding: 1px 6px; border-radius: 5px; color: var(--text-strong); }
+      pre { background: var(--surface-alt); color: var(--text); border: 1px solid var(--border); padding: 14px 16px; border-radius: 12px; overflow-x: auto; font-size: 0.82rem; font-family: 'Geist Mono', ui-monospace, monospace; margin: 12px 0; }
+      pre code { background: none; padding: 0; border: 0; }
+      code { background: var(--surface-alt); border: 1px solid var(--border-soft); padding: 0.05rem 0.3rem; border-radius: 5px; font-size: 0.88em; font-family: 'Geist Mono', ui-monospace, monospace; }
+      blockquote { border-left: 2px solid var(--border); padding-left: 1rem; color: var(--muted); margin: 0.6rem 0; }
+
+      /* ===== Responsive: <=767px collapses to the mobile form ===== */
+      @media (max-width: 767px) {
+        .cr-sidebar { display: none !important; }
+        .cr-main { padding: 16px 16px 76px !important; }
+        /* Paper detail: stack the summary/chat split vertically */
+        .cr-detail-split { flex-direction: column !important; overflow-y: auto !important; }
+        .cr-detail-pane { width: 100% !important; min-height: 60vh; }
+        .cr-split-handle { display: none !important; }
+        /* Give the sticky upload zone room above the tab bar */
+        .cr-uploadzone { margin-bottom: 76px !important; }
+      }
+      /* Bottom tab bar only shows on mobile */
+      .cr-tabbar { display: none; }
+      @media (max-width: 767px) {
+        .cr-tabbar {
+          display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
+          height: 66px; padding: 8px 12px 16px;
+          background: color-mix(in srgb, var(--bg-tint) 90%, transparent);
+          backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+          border-top: 1px solid var(--border-soft);
+        }
+      }
+
+      a { color: var(--accent); text-decoration: none; }
+      a:hover { color: var(--accent-hover); text-decoration: underline; }
+      button { font: inherit; color: inherit; }
+      input, textarea, select { font-family: inherit; color: inherit; }
+      ::selection { background: var(--accent-soft); color: var(--text-strong); }
+      ::-webkit-scrollbar { width: 10px; height: 10px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; border: 2px solid var(--bg); }
+      ::-webkit-scrollbar-thumb:hover { background: var(--faint); }
     </style>
   </head>
-  <body class="bg-white text-gray-900 min-w-[768px]">
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

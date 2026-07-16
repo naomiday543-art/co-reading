@@ -131,34 +131,36 @@ export default function PaperDetail({ paperId, onBack }) {
   const statusLabels = { unread: '待讀', reading: '閱讀中', done: '已讀' };
 
   if (loading) {
-    return <div className="flex items-center justify-center h-64 text-gray-400">載入中...</div>;
+    return <div className="flex items-center justify-center h-64 text-faint">載入中...</div>;
   }
   if (!paper) {
-    return <div className="flex items-center justify-center h-64 text-gray-400">論文不存在</div>;
+    return <div className="flex items-center justify-center h-64 text-faint">論文不存在</div>;
   }
 
   return (
     <div className="flex flex-col h-full">
       {/* Top bar */}
-      <div className="flex items-center justify-between mb-3 shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <button onClick={onBack} className="text-gray-500 hover:text-gray-700 text-sm">
-            ← 返回列表
+      <div className="flex items-center justify-between mb-4 shrink-0 gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <button onClick={onBack} className="flex items-center gap-1.5 text-muted hover:text-text-strong text-[13px] shrink-0 transition-colors">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
+            返回列表
           </button>
-          <h2 className="font-medium text-gray-900 truncate">{paper.title || paper.pdf_filename || '未命名'}</h2>
+          <div className="w-px h-5 bg-border shrink-0" />
+          <h2 className="cr-serif font-semibold text-[15.5px] text-text-strong truncate">{paper.title || paper.pdf_filename || '未命名'}</h2>
 
           {/* Status dropdown */}
-          <div className="relative">
+          <div className="relative shrink-0">
             <button
-              className="text-xs border border-gray-300 rounded px-2 py-0.5 text-gray-600 hover:bg-gray-50"
+              className="text-[11.5px] border border-border-soft bg-surface-alt rounded-full pl-2.5 pr-2 py-1 text-muted hover:bg-surface-hover flex items-center gap-1"
               onClick={() => setStatusMenu(!statusMenu)}
             >
               {statusLabels[paper.status]} ▾
             </button>
             {statusMenu && (
-              <div className="absolute left-0 top-7 bg-white border border-gray-200 rounded-md shadow-lg z-20 py-1 text-sm">
+              <div className="absolute left-0 top-8 bg-surface border border-border rounded-lg shadow-lg z-20 py-1 text-sm">
                 {Object.entries(statusLabels).map(([k, v]) => (
-                  <button key={k} className="block w-full text-left px-3 py-1 hover:bg-gray-100"
+                  <button key={k} className="block w-full text-left px-3 py-1.5 hover:bg-surface-hover"
                     onClick={() => handleStatusChange(k)}>{v}</button>
                 ))}
               </div>
@@ -166,25 +168,25 @@ export default function PaperDetail({ paperId, onBack }) {
           </div>
         </div>
 
-        <button onClick={handleDelete} className="text-gray-400 hover:text-red-500 text-sm" title="刪除">
+        <button onClick={handleDelete} className="text-faint hover:text-danger text-sm shrink-0 p-1 rounded hover:bg-surface-hover transition-colors" title="刪除">
           ✕
         </button>
       </div>
 
       {/* Split content */}
-      <div className="flex flex-1 overflow-hidden gap-0 min-h-0">
+      <div className="cr-detail-split flex flex-1 overflow-hidden gap-0 min-h-0">
         {/* Left: Summary / Fulltext tabs */}
-        <div className="flex flex-col overflow-hidden" style={{ width: `${split}%` }}>
+        <div className="cr-detail-pane flex flex-col overflow-hidden" style={{ width: `${split}%` }}>
           {/* Tab bar */}
-          <div className="flex border-b border-gray-200 mb-3 shrink-0">
+          <div className="flex border-b border-border-soft mb-3 shrink-0">
             <button
-              className={`text-sm px-3 py-1.5 border-b-2 transition-colors ${leftTab === 'summary' ? 'border-primary text-primary font-medium' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              className={`text-[13px] px-3 py-2 border-b-2 -mb-px transition-colors ${leftTab === 'summary' ? 'border-accent text-accent font-medium' : 'border-transparent text-muted hover:text-text-strong'}`}
               onClick={() => setLeftTab('summary')}
             >
               AI 摘要
             </button>
             <button
-              className={`text-sm px-3 py-1.5 border-b-2 transition-colors ${leftTab === 'fulltext' ? 'border-primary text-primary font-medium' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              className={`text-[13px] px-3 py-2 border-b-2 -mb-px transition-colors ${leftTab === 'fulltext' ? 'border-accent text-accent font-medium' : 'border-transparent text-muted hover:text-text-strong'}`}
               onClick={() => setLeftTab('fulltext')}
             >
               原文
@@ -216,9 +218,9 @@ export default function PaperDetail({ paperId, onBack }) {
 
           {/* Notes */}
           <div className="mt-6">
-            <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">我的筆記</h3>
+            <h3 className="cr-serif text-sm font-semibold text-text-strong mb-2 flex items-center gap-2">我的筆記</h3>
             <textarea
-              className="w-full border border-gray-300 rounded-lg p-3 text-sm resize-y min-h-[80px] focus:outline-none focus:ring-1 focus:ring-primary"
+              className="w-full border border-border bg-surface rounded-lg p-3 text-sm resize-y min-h-[80px] focus:outline-none focus:border-accent"
               placeholder="記錄你的想法..."
               value={paper.notes || ''}
               onChange={async (e) => {
@@ -232,7 +234,7 @@ export default function PaperDetail({ paperId, onBack }) {
 
           {/* Tags */}
           <div className="mt-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">Tags</h3>
+            <h3 className="cr-serif text-sm font-semibold text-text-strong mb-2 flex items-center gap-2">標籤</h3>
             <div className="flex flex-wrap gap-1 mb-2">
               {(paper.tags || []).map(tag => (
                 <TagBadge key={tag.id} tag={tag} onRemove={() => handleRemoveTag(tag.id)} />
@@ -240,7 +242,7 @@ export default function PaperDetail({ paperId, onBack }) {
             </div>
             <div className="relative">
               <input
-                className="text-sm border border-gray-300 rounded-lg px-2 py-1 w-40 focus:outline-none focus:ring-1 focus:ring-primary"
+                className="text-sm border border-border bg-surface rounded-lg px-2 py-1 w-40 focus:outline-none focus:border-accent"
                 placeholder="+ 新增 tag"
                 value={tagInput}
                 onChange={e => handleTagInputChange(e.target.value)}
@@ -257,16 +259,16 @@ export default function PaperDetail({ paperId, onBack }) {
                 }}
               />
               {showTagSuggest && (tagSuggestions.length > 0 || tagInput.trim()) && (
-                <div className="absolute left-0 top-8 bg-white border border-gray-200 rounded-md shadow-lg z-20 py-1 text-sm w-40">
+                <div className="absolute left-0 top-8 bg-surface border border-border rounded-lg shadow-lg z-20 py-1 text-sm w-40">
                   {tagSuggestions.map(t => (
-                    <button key={t.id} className="block w-full text-left px-3 py-1 hover:bg-gray-100"
+                    <button key={t.id} className="block w-full text-left px-3 py-1.5 hover:bg-surface-hover"
                       onClick={() => handleAddTag(t.id)}>
                       <span className="w-2 h-2 rounded-full inline-block mr-1" style={{ backgroundColor: t.color }} />
                       {t.name}
                     </button>
                   ))}
                   {tagInput.trim() && !tags.some(t => t.name === tagInput.trim()) && (
-                    <button className="block w-full text-left px-3 py-1 hover:bg-gray-100 text-primary"
+                    <button className="block w-full text-left px-3 py-1.5 hover:bg-surface-hover text-accent"
                       onClick={handleCreateAndAddTag}>
                       + 新建「{tagInput.trim()}」
                     </button>
@@ -278,20 +280,20 @@ export default function PaperDetail({ paperId, onBack }) {
 
           {/* Tree assignment */}
           <div className="mt-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">分類</h3>
+            <h3 className="cr-serif text-sm font-semibold text-text-strong mb-2 flex items-center gap-2">分類</h3>
             <div className="relative">
               <button
-                className="text-sm border border-gray-300 rounded-lg px-2 py-1 text-gray-600 hover:bg-gray-50"
+                className="text-sm border border-border bg-surface rounded-lg px-2.5 py-1 text-muted hover:bg-surface-hover"
                 onClick={() => setTreeMenu(!treeMenu)}
               >
                 {paper.tree_node ? paper.tree_node.name : '未分類'} ▾
               </button>
               {treeMenu && (
-                <div className="absolute left-0 top-8 bg-white border border-gray-200 rounded-md shadow-lg z-20 py-1 text-sm max-h-48 overflow-y-auto">
-                  <button className="block w-full text-left px-3 py-1 hover:bg-gray-100"
+                <div className="absolute left-0 top-8 bg-surface border border-border rounded-lg shadow-lg z-20 py-1 text-sm max-h-48 overflow-y-auto">
+                  <button className="block w-full text-left px-3 py-1.5 hover:bg-surface-hover"
                     onClick={() => handleMoveToTree(null)}>未分類</button>
                   {flattenTree(tree).map(n => (
-                    <button key={n.id} className="block w-full text-left px-3 py-1 hover:bg-gray-100"
+                    <button key={n.id} className="block w-full text-left px-3 py-1.5 hover:bg-surface-hover"
                       style={{ paddingLeft: `${12 + n.depth * 16}px` }}
                       onClick={() => handleMoveToTree(n.id)}>
                       {n.name}
@@ -303,18 +305,18 @@ export default function PaperDetail({ paperId, onBack }) {
           </div>
 
           {/* Meta info */}
-          <div className="mt-4 pt-3 border-t border-gray-100 text-xs text-gray-500">
+          <div className="mt-4 pt-3 border-t border-border-soft text-xs text-muted">
             {paper.authors && <span>{paper.authors}</span>}
-            {paper.year && <span> | {paper.year}</span>}
-            {paper.doi && <span> | DOI: {paper.doi}</span>}
+            {paper.year && <span className="cr-mono"> · {paper.year}</span>}
+            {paper.doi && <span className="cr-mono"> · DOI: {paper.doi}</span>}
           </div>
 
           {/* Related Insights */}
-          <div className="mt-4 pt-3 border-t border-gray-100">
+          <div className="mt-4 pt-3 border-t border-border-soft">
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-semibold text-gray-700">相關洞察</h3>
+              <h3 className="cr-serif text-sm font-semibold text-text-strong">相關洞察</h3>
               <button
-                className="text-xs text-primary hover:underline"
+                className="text-xs text-accent hover:underline"
                 onClick={() => setShowInsightForm(true)}
               >
                 + 從此論文新建
@@ -332,7 +334,7 @@ export default function PaperDetail({ paperId, onBack }) {
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-gray-400">尚無相關洞察，讀完後跟 AI 討論，洞察會自然沉澱。</p>
+              <p className="text-xs text-faint">尚無相關洞察，讀完後跟 AI 討論，洞察會自然沉澱。</p>
             )}
           </div>
             </>
@@ -344,12 +346,12 @@ export default function PaperDetail({ paperId, onBack }) {
 
         {/* Split handle */}
         <div
-          className="w-1.5 bg-gray-100 hover:bg-primary/30 cursor-col-resize shrink-0 rounded-full my-4"
+          className="cr-split-handle w-1.5 bg-border-soft hover:bg-accent-soft cursor-col-resize shrink-0 rounded-full my-4 transition-colors"
           onMouseDown={handleMouseDown}
         />
 
         {/* Right: Chat */}
-        <div className="overflow-y-auto pl-4 flex flex-col min-h-0" style={{ width: `${100 - split}%` }}>
+        <div className="cr-detail-pane overflow-y-auto pl-4 flex flex-col min-h-0" style={{ width: `${100 - split}%` }}>
           <ChatPanel paperId={paperId} paper={paper} onSaveInsight={() => setShowInsightForm(true)} />
         </div>
       </div>
