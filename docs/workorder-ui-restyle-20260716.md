@@ -28,3 +28,11 @@ co-reading 現在是 Tailwind 預設灰，跟導師系統（research-gateway 前
 
 ## 附錄：實作偏離記錄
 （實作時如偏離工單在此追加）
+
+### 2026-07-16 實作收尾（feat/ui-restyle-20260716，5 commits，npm test 11/11 綠）
+- **Tailwind 路線＝(a)**：保留 CDN，`tailwind.config` 映射 token 為 CSS 變數色；`primary` 設為 `var(--accent)` 別名以減少改名；深色模式因 token 是變數自動翻轉、零 `dark:` 變體；零新依賴。`/opacity` 修飾（`bg-primary/10` 等）配 `var()` 不生效，已全改明確 token。
+- **不重排三欄閱讀器**：原型 PAPER DETAIL 為 PDF｜討論｜洞察三欄；依紅線「維持組件架構」保留現有「摘要/原文 | 討論」兩欄，僅換皮。
+- **手機導覽**：實作底部 tab bar（論文/洞察/設定，複用 `navigate()`），非原型的狀態 chip（待讀/閱讀中/…）——後者是另一套過濾模型，會動行為故未做。
+- **原型裝飾性假資料**（縮圖膠捲、頁碼列、Temperature 滑桿、用量統計、頂部分頁）未實作——對應後端行為不存在，屬「不加功能」範圍外。
+- **維度色**：概念=fact、延伸=progress、悬题=hyp（工單三維精確對應）；其餘維度復用同盤 token。
+- **已知妥協**：PDF iframe 內容為瀏覽器原生渲染，深色下仍白底；手機分割視圖用 CSS `!important` 覆蓋 JS 驅動的 inline width%。
