@@ -44,22 +44,22 @@ export default function TreeNode({ node, depth, selectedId, onSelect, onRefresh 
   return (
     <div className="select-none">
       <div
-        className={`flex items-center gap-1 px-2 py-1 rounded cursor-pointer text-sm group ${isSelected ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-gray-100'}`}
+        className={`flex items-center gap-1 px-2.5 py-2 rounded-lg cursor-pointer text-[13.5px] group transition-colors ${isSelected ? 'bg-surface-alt text-text-strong font-medium' : 'text-text hover:bg-surface-hover'}`}
         style={{ paddingLeft: `${8 + depth * 16}px` }}
         onClick={() => onSelect(node.id)}
         onContextMenu={(e) => { e.preventDefault(); setShowMenu(!showMenu); }}
       >
         <button
-          className="w-4 h-4 flex items-center justify-center text-gray-400 hover:text-gray-600"
+          className="w-4 h-4 flex items-center justify-center text-faint hover:text-muted"
           onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
         >
           {hasChildren ? (expanded ? '▾' : '▸') : <span className="w-4" />}
         </button>
-        <span className="mr-1">{expanded && hasChildren ? '▾' : '▸'}</span>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-faint"><path d="M3 7h6l2 2h10v10H3z" /></svg>
         {editing ? (
           <input
             autoFocus
-            className="flex-1 text-sm border border-gray-300 rounded px-1 py-0"
+            className="flex-1 text-sm border border-border bg-surface rounded px-1 py-0"
             value={editName}
             onChange={e => setEditName(e.target.value)}
             onBlur={handleRename}
@@ -70,25 +70,25 @@ export default function TreeNode({ node, depth, selectedId, onSelect, onRefresh 
           <span className="flex-1 truncate">{node.name}</span>
         )}
         {node.paper_count > 0 && (
-          <span className="text-xs text-gray-400">{node.paper_count}</span>
+          <span className="cr-mono text-[11px] text-faint">{node.paper_count}</span>
         )}
 
         {/* Context menu trigger */}
         <div className="relative">
           <button
-            className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-gray-600 ml-1"
+            className="opacity-0 group-hover:opacity-100 text-faint hover:text-muted ml-1"
             onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}
           >
             ⋯
           </button>
           {showMenu && (
-            <div className="absolute right-0 top-5 bg-white border border-gray-200 rounded-md shadow-lg z-20 py-1 text-sm min-w-[100px]"
+            <div className="absolute right-0 top-5 bg-surface border border-border rounded-lg shadow-lg z-20 py-1 text-sm min-w-[100px]"
               onClick={e => e.stopPropagation()}>
-              <button className="block w-full text-left px-3 py-1 hover:bg-gray-100"
+              <button className="block w-full text-left px-3 py-1.5 hover:bg-surface-hover"
                 onClick={() => { setEditing(true); setEditName(node.name); setShowMenu(false); }}>重新命名</button>
-              <button className="block w-full text-left px-3 py-1 hover:bg-gray-100"
+              <button className="block w-full text-left px-3 py-1.5 hover:bg-surface-hover"
                 onClick={() => { setShowNewChild(true); setShowMenu(false); }}>新增子分類</button>
-              <button className="block w-full text-left px-3 py-1 hover:bg-gray-100 text-red-600"
+              <button className="block w-full text-left px-3 py-1.5 hover:bg-surface-hover text-danger"
                 onClick={handleDelete}>刪除</button>
             </div>
           )}
@@ -112,13 +112,13 @@ export default function TreeNode({ node, depth, selectedId, onSelect, onRefresh 
         <div className="flex gap-1 ml-2 mt-1" style={{ paddingLeft: `${8 + (depth + 1) * 16}px` }}>
           <input
             autoFocus
-            className="flex-1 text-sm border border-gray-300 rounded px-2 py-0.5"
+            className="flex-1 text-sm border border-border bg-surface rounded px-2 py-0.5"
             value={newChildName}
             onChange={e => setNewChildName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') handleCreateChild(); if (e.key === 'Escape') setShowNewChild(false); }}
             placeholder="子分類名稱"
           />
-          <button onClick={handleCreateChild} className="text-xs text-primary hover:underline">確定</button>
+          <button onClick={handleCreateChild} className="text-xs text-accent hover:underline">確定</button>
         </div>
       )}
     </div>

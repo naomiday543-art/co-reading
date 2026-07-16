@@ -73,19 +73,18 @@ export default function Sidebar({ onNavigate, onRefresh }) {
 
   return (
     <aside
-      className={`sidebar shrink-0 flex flex-col overflow-hidden relative ${sidebarOpen ? 'border-r border-gray-200' : ''} ${dragging ? '' : 'transition-[width] duration-200'}`}
+      className={`shrink-0 flex flex-col overflow-hidden relative bg-bg-tint ${sidebarOpen ? 'border-r border-border-soft' : ''} ${dragging ? '' : 'transition-[width] duration-200'}`}
       style={{ width: sidebarOpen ? width : 0 }}
     >
       {/* Tree Section */}
-      <div className="flex-1 overflow-y-auto p-3" style={{ minWidth: MIN_WIDTH }}>
-        <div className="text-xs font-semibold text-gray-500 uppercase mb-2">知識樹</div>
+      <div className="flex-1 overflow-y-auto p-4" style={{ minWidth: MIN_WIDTH }}>
+        <div className="cr-mono text-[10.5px] font-medium tracking-[0.14em] text-faint uppercase px-2 mb-2">知識樹</div>
 
         {/* All papers */}
         <div
-          className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm ${!selectedTreeNode && !selectedTag ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-gray-100'}`}
+          className={`flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer text-[13.5px] transition-colors ${!selectedTreeNode && !selectedTag ? 'bg-surface-alt text-text-strong font-medium' : 'text-text hover:bg-surface-hover'}`}
           onClick={() => { setSelectedTreeNode(null); setSelectedTag(null); onNavigate('library'); }}
         >
-          
           <span className="flex-1">全部論文</span>
         </div>
 
@@ -107,10 +106,9 @@ export default function Sidebar({ onNavigate, onRefresh }) {
 
         {/* Uncategorized */}
         <div
-          className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm ${selectedTreeNode === '__none' ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-gray-100'}`}
+          className={`flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer text-[13.5px] transition-colors ${selectedTreeNode === '__none' ? 'bg-surface-alt text-text-strong font-medium' : 'text-text hover:bg-surface-hover'}`}
           onClick={() => { setSelectedTreeNode('__none'); setSelectedTag(null); onNavigate('library'); }}
         >
-          
           <span className="flex-1">未分類</span>
         </div>
 
@@ -119,49 +117,52 @@ export default function Sidebar({ onNavigate, onRefresh }) {
           <div className="flex gap-1 mt-1 ml-5">
             <input
               autoFocus
-              className="flex-1 text-sm border border-gray-300 rounded px-2 py-0.5"
+              className="flex-1 text-sm border border-border rounded-lg bg-surface px-2 py-0.5"
               value={newFolderName}
               onChange={e => setNewFolderName(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') handleCreateFolder(); if (e.key === 'Escape') setShowNewFolder(false); }}
               placeholder="新資料夾"
             />
-            <button onClick={handleCreateFolder} className="text-xs text-primary hover:underline">確定</button>
+            <button onClick={handleCreateFolder} className="text-xs text-accent hover:underline">確定</button>
           </div>
         ) : (
           <button
             onClick={() => setShowNewFolder(true)}
-            className="text-xs text-gray-500 hover:text-primary mt-1 ml-5"
+            className="flex items-center gap-2 px-2.5 py-2 rounded-lg text-[13px] text-faint hover:bg-surface-hover hover:text-text w-full transition-colors"
           >
-            + 新資料夾
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+            <span>新資料夾</span>
           </button>
         )}
 
         {/* Tags section */}
-        <div className="text-xs font-semibold text-gray-500 uppercase mt-4 mb-2">標籤</div>
+        <div className="cr-mono text-[10.5px] font-medium tracking-[0.14em] text-faint uppercase px-2 mt-5 mb-2">標籤</div>
+        <div className="flex flex-wrap gap-1.5 px-1">
         {tags.map(tag => (
-          <div
+          <span
             key={tag.id}
-            className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-sm ${selectedTag === tag.id ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-gray-100'}`}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full cursor-pointer text-xs border transition-colors ${selectedTag === tag.id ? 'bg-accent-soft text-accent border-transparent font-medium' : 'bg-surface text-text border-border-soft hover:bg-surface-hover'}`}
             onClick={() => { setSelectedTag(tag.id); setSelectedTreeNode(null); onNavigate('library'); }}
           >
             <span
-              className="w-2.5 h-2.5 rounded-full shrink-0"
+              className="w-2 h-2 rounded-full shrink-0"
               style={{ backgroundColor: tag.color }}
             />
-            <span className="flex-1 truncate">{tag.name}</span>
-          </div>
+            <span className="truncate max-w-[120px]">{tag.name}</span>
+          </span>
         ))}
         {tags.length === 0 && (
-          <p className="text-xs text-gray-400 ml-2">尚無標籤</p>
+          <p className="text-xs text-faint px-1">尚無標籤</p>
         )}
+        </div>
 
         {/* Insights section */}
-        <div className="text-xs font-semibold text-gray-500 uppercase mt-4 mb-2">洞察</div>
+        <div className="cr-mono text-[10.5px] font-medium tracking-[0.14em] text-faint uppercase px-2 mt-5 mb-2">洞察</div>
         <div
-          className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm hover:bg-gray-100"
+          className="flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer text-[13.5px] text-text hover:bg-surface-hover transition-colors"
           onClick={() => onNavigate('insights')}
         >
-          
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8" /><path d="M12 8v4l3 2" /></svg>
           <span className="flex-1">所有洞察</span>
         </div>
       </div>
@@ -169,7 +170,7 @@ export default function Sidebar({ onNavigate, onRefresh }) {
       {/* Drag handle for resizing */}
       {sidebarOpen && (
         <div
-          className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/30 active:bg-primary/50"
+          className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-accent-soft active:bg-accent-soft"
           onMouseDown={startDrag}
         />
       )}

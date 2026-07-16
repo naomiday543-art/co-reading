@@ -1,79 +1,73 @@
 import React from 'react';
 import TagBadge from './TagBadge';
 
-const statusDots = {
-  unread: '#B4B2A9',
-  reading: '#2F3437',
-  done: '#346538',
-};
-
-const statusLabels = {
-  unread: '待讀',
-  reading: '閱讀中',
-  done: '已讀',
+// Status pill styling — maps to the semantic tokens from the design language.
+const statusStyles = {
+  unread: { label: '待讀', dot: 'var(--faint)', cls: 'bg-surface-alt border border-border-soft text-muted' },
+  reading: { label: '閱讀中', dot: 'var(--hyp)', cls: 'bg-hyp-soft text-hyp' },
+  done: { label: '已讀', dot: 'var(--fact)', cls: 'bg-fact-soft text-fact' },
 };
 
 export default function PaperCard({ paper, onClick, onRefresh }) {
-  const statusLabel = statusLabels[paper.status] || '待讀';
-  const statusDot = statusDots[paper.status] || statusDots.unread;
+  const st = statusStyles[paper.status] || statusStyles.unread;
+  const analyzing = paper.analyze_status === 'analyzing';
   const hasSummary = paper.summary_bg || paper.summary_conclusions;
   const snippet = paper.summary_conclusions
-    ? paper.summary_conclusions.slice(0, 80) + '...'
+    ? paper.summary_conclusions.slice(0, 120) + '…'
     : paper.summary_bg
-      ? paper.summary_bg.slice(0, 80) + '...'
+      ? paper.summary_bg.slice(0, 120) + '…'
       : null;
 
   return (
-    <div className="card p-4 cursor-pointer" onClick={() => onClick(paper.id)}>
-      <div className="flex items-start justify-between gap-3">
+    <div className="card p-5 cursor-pointer" onClick={() => onClick(paper.id)}>
+      <div className="flex items-start justify-between gap-4">
         <div className="flex-1 min-w-0">
           {/* Title */}
-          <h3 className="font-medium text-gray-900 truncate">
+          <h3 className="cr-serif font-semibold text-[19px] leading-snug text-text-strong">
             {paper.title || paper.pdf_filename || '未命名論文'}
           </h3>
 
           {/* Authors / Year / DOI */}
-          <p className="text-sm text-gray-500 mt-0.5">
-            {[paper.authors, paper.year, paper.doi ? `DOI: ${paper.doi}` : null]
-              .filter(Boolean).join('  ')}
+          <p className="text-[12.5px] text-muted mt-2">
+            {[paper.authors, paper.doi ? `DOI: ${paper.doi}` : null].filter(Boolean).join(' · ')}
+            {paper.year && <span className="cr-mono text-[11.5px]"> · {paper.year}</span>}
           </p>
-
-          {/* Tags */}
-          {(paper.tags && paper.tags.length > 0) && (
-            <div className="flex flex-wrap gap-1 mt-1.5">
-              {paper.tags.map(tag => (
-                <TagBadge key={tag.id} tag={tag} small />
-              ))}
-            </div>
-          )}
-
-          {/* Summary snippet */}
-          {snippet && (
-            <p className="text-sm text-gray-600 mt-1.5 line-clamp-2">
-              AI 摘要: {snippet}
-            </p>
-          )}
         </div>
 
-        {/* Status */}
-        <div className="shrink-0 flex flex-col items-end gap-1">
-          <span className="text-xs text-gray-500 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ backgroundColor: statusDot }} />
-            {statusLabel}
-          </span>
-
-          {/* Analyze status */}
-          {paper.analyze_status === 'analyzing' && (
-            <span className="text-xs text-primary">AI 通讀中...</span>
-          )}
-          {paper.analyze_status === 'error' && (
-            <span className="text-xs text-red-500" title={paper.analyze_error}>通讀失敗</span>
-          )}
-          {paper.analyze_status === 'pending' && !hasSummary && (
-            <span className="text-xs text-gray-400">[開始 AI 通讀]</span>
-          )}
+        {/* Status pill */}
+        <div className={`shrink-0 flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full text-[11.5px] font-medium whitespace-nowrap ${st.cls}`}>
+          <span
+            className={`w-1.5 h-1.5 rounded-full inline-block ${analyzing || paper.status === 'reading' ? 'cr-pulse-dot' : ''}`}
+            style={{ backgroundColor: st.dot }}
+          />
+          {st.label}
         </div>
       </div>
+
+      {/* Summary snippet */}
+      {snippet && (
+        <div className="mt-3.5 text-[13.5px] leading-relaxed text-text line-clamp-2">
+          <span className="cr-mono text-[11px] tracking-wide text-faint pr-2">AI 摘要</span>
+          {snippet}
+        </div>
+      )}
+
+      {/* Analyze status hints */}
+      {analyzing && (
+        <div className="mt-3 text-[12px] text-hyp cr-mono">正在通讀中…</div>
+      )}
+      {paper.analyze_status === 'error' && (
+        <div className="mt-3 text-[12px] text-danger" title={paper.analyze_error}>通讀失敗</div>
+      )}
+
+      {/* Footer: tags + meta */}
+      {(paper.tags && paper.tags.length > 0) && (
+        <div className="mt-3.5 flex flex-wrap gap-1.5">
+          {paper.tags.map(tag => (
+            <TagBadge key={tag.id} tag={tag} small />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
