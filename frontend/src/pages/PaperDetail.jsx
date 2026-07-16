@@ -174,9 +174,9 @@ export default function PaperDetail({ paperId, onBack }) {
       </div>
 
       {/* Split content */}
-      <div className="flex flex-1 overflow-hidden gap-0 min-h-0">
+      <div className="cr-detail-split flex flex-1 overflow-hidden gap-0 min-h-0">
         {/* Left: Summary / Fulltext tabs */}
-        <div className="flex flex-col overflow-hidden" style={{ width: `${split}%` }}>
+        <div className="cr-detail-pane flex flex-col overflow-hidden" style={{ width: `${split}%` }}>
           {/* Tab bar */}
           <div className="flex border-b border-border-soft mb-3 shrink-0">
             <button
@@ -346,12 +346,12 @@ export default function PaperDetail({ paperId, onBack }) {
 
         {/* Split handle */}
         <div
-          className="w-1.5 bg-border-soft hover:bg-accent-soft cursor-col-resize shrink-0 rounded-full my-4 transition-colors"
+          className="cr-split-handle w-1.5 bg-border-soft hover:bg-accent-soft cursor-col-resize shrink-0 rounded-full my-4 transition-colors"
           onMouseDown={handleMouseDown}
         />
 
         {/* Right: Chat */}
-        <div className="overflow-y-auto pl-4 flex flex-col min-h-0" style={{ width: `${100 - split}%` }}>
+        <div className="cr-detail-pane overflow-y-auto pl-4 flex flex-col min-h-0" style={{ width: `${100 - split}%` }}>
           <ChatPanel paperId={paperId} paper={paper} onSaveInsight={() => setShowInsightForm(true)} />
         </div>
       </div>

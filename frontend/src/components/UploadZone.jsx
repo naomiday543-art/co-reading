@@ -36,7 +36,7 @@ export default function UploadZone({ onUploaded }) {
 
   return (
     <div
-      className={`m-6 mt-0 rounded-xl border-[1.5px] border-dashed transition-colors ${dragOver ? 'border-accent bg-accent-soft' : 'border-border bg-surface-alt'}`}
+      className={`cr-uploadzone m-6 mt-0 rounded-xl border-[1.5px] border-dashed transition-colors ${dragOver ? 'border-accent bg-accent-soft' : 'border-border bg-surface-alt'}`}
       onDragOver={e => { e.preventDefault(); setDragOver(true); }}
       onDragLeave={() => setDragOver(false)}
       onDrop={e => {

@@ -141,6 +141,29 @@
       code { background: var(--surface-alt); border: 1px solid var(--border-soft); padding: 0.05rem 0.3rem; border-radius: 5px; font-size: 0.88em; font-family: 'Geist Mono', ui-monospace, monospace; }
       blockquote { border-left: 2px solid var(--border); padding-left: 1rem; color: var(--muted); margin: 0.6rem 0; }
 
+      /* ===== Responsive: <=767px collapses to the mobile form ===== */
+      @media (max-width: 767px) {
+        .cr-sidebar { display: none !important; }
+        .cr-main { padding: 16px 16px 76px !important; }
+        /* Paper detail: stack the summary/chat split vertically */
+        .cr-detail-split { flex-direction: column !important; overflow-y: auto !important; }
+        .cr-detail-pane { width: 100% !important; min-height: 60vh; }
+        .cr-split-handle { display: none !important; }
+        /* Give the sticky upload zone room above the tab bar */
+        .cr-uploadzone { margin-bottom: 76px !important; }
+      }
+      /* Bottom tab bar only shows on mobile */
+      .cr-tabbar { display: none; }
+      @media (max-width: 767px) {
+        .cr-tabbar {
+          display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
+          height: 66px; padding: 8px 12px 16px;
+          background: color-mix(in srgb, var(--bg-tint) 90%, transparent);
+          backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+          border-top: 1px solid var(--border-soft);
+        }
+      }
+
       a { color: var(--accent); text-decoration: none; }
       a:hover { color: var(--accent-hover); text-decoration: underline; }
       button { font: inherit; color: inherit; }

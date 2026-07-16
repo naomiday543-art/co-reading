@@ -155,7 +155,7 @@ export default function App() {
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
         {page !== 'settings' && <Sidebar onNavigate={navigate} onRefresh={loadData} />}
-        <main className="flex-1 overflow-y-auto p-6 bg-bg">
+        <main className="cr-main flex-1 overflow-y-auto p-6 bg-bg">
           {page === 'library' && <Library onNavigate={navigate} onRefresh={loadData} />}
           {page === 'detail' && <PaperDetail paperId={paperId} onBack={() => navigate('library')} />}
           {page === 'insights' && <InsightsPanel onNavigate={navigate} />}
@@ -167,6 +167,33 @@ export default function App() {
       {page !== 'settings' && !uploading && (
         <UploadZone onUploaded={loadData} />
       )}
+
+      {/* Mobile bottom tab bar (<=767px, mirrors header nav) */}
+      <nav className="cr-tabbar">
+        {[
+          { key: 'library', label: '論文', path: 'M3 7h18M3 12h18M3 17h12' },
+          { key: 'insights', label: '洞察', path: 'M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM12 8v4l3 2', circle: true },
+          { key: 'settings', label: '設定', gear: true },
+        ].map(item => {
+          const active = page === item.key || (item.key === 'library' && page === 'detail');
+          return (
+            <button
+              key={item.key}
+              onClick={() => navigate(item.key)}
+              className={`flex-1 flex flex-col items-center justify-center gap-1 text-[10.5px] ${active ? 'text-accent font-medium' : 'text-muted'}`}
+            >
+              {item.gear ? (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
+              ) : item.circle ? (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8" /><path d="M12 8v4l3 2" /></svg>
+              ) : (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={item.path} /></svg>
+              )}
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
     </div>
   );
 }

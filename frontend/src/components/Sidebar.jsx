@@ -73,7 +73,7 @@ export default function Sidebar({ onNavigate, onRefresh }) {
 
   return (
     <aside
-      className={`shrink-0 flex flex-col overflow-hidden relative bg-bg-tint ${sidebarOpen ? 'border-r border-border-soft' : ''} ${dragging ? '' : 'transition-[width] duration-200'}`}
+      className={`cr-sidebar shrink-0 flex flex-col overflow-hidden relative bg-bg-tint ${sidebarOpen ? 'border-r border-border-soft' : ''} ${dragging ? '' : 'transition-[width] duration-200'}`}
       style={{ width: sidebarOpen ? width : 0 }}
     >
       {/* Tree Section */}
