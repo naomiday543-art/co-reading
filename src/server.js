@@ -40,6 +40,7 @@ app.put('/api/settings', (req, res) => {
   const fields = [
     'ai_api_key', 'ai_base_url', 'ai_model', 'ai_format',
     'analyze_api_key', 'analyze_base_url', 'analyze_model', 'analyze_format',
+    'gateway_url', 'gateway_token', // 洞察出海到 research-gateway（契約 §二 M3.b）
   ];
   for (const key of fields) {
     if (req.body[key] !== undefined) {
@@ -82,6 +83,10 @@ const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.arg
 if (isMain) {
   app.listen(PORT, () => {
     log('INFO', `Co-Reading 服務已啟動，端口 ${PORT}`);
+    // 啟動補傳（契約 §五）：撈 synced_at IS NULL 的洞察重送。fire-and-forget，不阻塞啟動。
+    import('./gateway.js')
+      .then(({ flushUnsynced }) => flushUnsynced())
+      .catch((e) => log('WARN', `啟動補傳失敗: ${e.message}`));
   });
 }
 

@@ -168,6 +168,19 @@ if (!columnExists('messages', 'edit_branches')) {
   db.exec(`ALTER TABLE messages ADD COLUMN edit_branches TEXT`);
 }
 
+// ── Idempotent migration: insights outbox columns (gateway sync, M3.b) ──
+// external_ombre_id = research-gateway 回填的記憶 id（契約 §二 ombre_id / §六 對應）。
+// synced_at IS NULL = 尚未出海，供啟動補傳撈取（契約 §五）。ALTER 不重建表。
+if (!columnExists('insights', 'external_ombre_id')) {
+  db.exec(`ALTER TABLE insights ADD COLUMN external_ombre_id TEXT`);
+}
+if (!columnExists('insights', 'synced_at')) {
+  db.exec(`ALTER TABLE insights ADD COLUMN synced_at INTEGER`);
+}
+// UNIQUE（§六）：以 partial index 實作，允許多個未同步的 NULL 值並存。
+db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_insights_external_ombre
+  ON insights(external_ombre_id) WHERE external_ombre_id IS NOT NULL`);
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS message_branches (
     id TEXT PRIMARY KEY,
