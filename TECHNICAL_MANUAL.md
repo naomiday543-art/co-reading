@@ -442,19 +442,23 @@ DB `settings` 表 > 環境變量。Settings 頁面修改會即時生效，無需
 
 1. **單向匯出**：co-reading → gateway → Ombre。原本評估過的雙向同步、讀時聯合兩案
    已寫入契約文檔的觸發條件，單向跑穩前不做。
-2. **傳輸走 gateway 的 `POST /memory/insights`**，不直連 Ombre（:8001 只在 VPS 內網）。
+2. **傳輸走 gateway 的 `POST /memory/insights`**（app 路由；對外經 nginx 掛在 `/research/*` 下，
+   即 `gateway_url` 設成 `https://<gateway>/research`，發貨打 `${gateway_url}/memory/insights`），
+   不直連 Ombre（:8001 只在 VPS 內網）。
    請求體格式、tag 規範（`source:co-reading` / `paper:<id>` / `dim:<dimension>` / `tree:<path>`）、
    六維 dimension → Ombre 類型的映射表，全部見契約文檔 §二–§四。
 3. **outbox 模式**：先寫本地成功，再 fire-and-forget 同步；失敗靠 `synced_at IS NULL` 補傳，
    `external_id` 冪等鍵防重複。AI 提取流程永遠不等外部網路。
 
-### 11.3 co-reading 側改動點（對應契約文檔 §八）
+### 11.3 co-reading 側改動點（對應契約文檔 §八）—— ✅ 已上線 2026-07-17
 
-1. `settings` 表加 `gateway_url` / `gateway_token`（Settings 頁可配）
-2. 新增 `src/gateway.js`：封裝 POST + 啟動時補傳 `synced_at IS NULL` 的條目
-3. [src/db.js](src/db.js)：`insights` 加 `external_ombre_id TEXT UNIQUE`、`synced_at INTEGER`
-   （記得走 idempotent migration，見 §6.1）
-4. 在 [memory.js extractInsights](src/memory.js:158) 寫入本地成功後 fire-and-forget 同步
+1. ✅ `settings` 表加 `gateway_url` / `gateway_token`（Settings 頁可配，白名單見 [server.js](src/server.js)）
+2. ✅ 新增 [src/gateway.js](src/gateway.js)：`buildInsightPayload` / `expandTreePath`（M3.c）/
+   `syncInsight`（fire-and-forget，成功回填 `external_ombre_id`+`synced_at`，失敗不拋不阻塞）/
+   `flushUnsynced`（啟動補傳 `synced_at IS NULL`）
+3. ✅ [src/db.js](src/db.js)：`insights` 加 `external_ombre_id`、`synced_at` + partial UNIQUE index
+   （idempotent ALTER，不重建表）
+4. ✅ 在 [memory.js extractInsights](src/memory.js:158) 寫入本地成功後 `syncInsightFireAndForget`
 5. （後續，讀方向）[search.js searchInsights](src/search.js:7) 命中不足時補查 gateway——
    契約文檔已明確**先不做**，等本地 FTS5 不夠用再說
 
