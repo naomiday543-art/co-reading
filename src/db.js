@@ -5,9 +5,11 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-mkdirSync(new URL('../data', import.meta.url).pathname, { recursive: true });
-
-const dbPath = new URL('../data/co-reading.db', import.meta.url).pathname;
+// CO_READING_DB_PATH：測試專用逃生口（見 test/db-fts-triggers.test.js）——讓回歸測試
+// 能用「真實 schema + 真實遷移」跑在 temp DB 上，而不碰 data/co-reading.db。生產不設。
+const dbPath = process.env.CO_READING_DB_PATH
+  || new URL('../data/co-reading.db', import.meta.url).pathname;
+mkdirSync(dirname(dbPath), { recursive: true });
 const db = new Database(dbPath);
 
 db.pragma('journal_mode = WAL');
