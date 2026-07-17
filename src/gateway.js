@@ -37,6 +37,13 @@ export function buildInsightPayload(insight, database = db) {
   let tags = [];
   try { tags = JSON.parse(insight.tags_json || '[]'); } catch { tags = []; }
 
+  // 契約 §五：source_context 必帶（非空）。提取器的關鍵詞回找會撲空（改寫後的洞察
+  // 匹配不中原話），存量 13 條裡 9 條為空——兜底用誠實的最小來源標注，不編造對話。
+  const source_context = (insight.source_context || '').trim()
+    || (paper?.title
+      ? `出自《${paper.title}》（提取時未保留對話片段）`
+      : '（存量洞察，來源上下文未保留）');
+
   const body = {
     external_id: insight.id,
     title: insight.title || '',
@@ -44,7 +51,7 @@ export function buildInsightPayload(insight, database = db) {
     dimension: insight.dimension,
     paper_id: insight.source_paper_id || '',
     paper_title: paper?.title || '',
-    source_context: insight.source_context || '',
+    source_context,
     tags,
   };
   if (tree_path) body.tree_path = tree_path; // M3.c，僅在有樹路徑時帶

@@ -83,6 +83,16 @@ describe('buildInsightPayload', () => {
     const body = buildInsightPayload(seedInsight(db, { source_paper_id: 'p1' }), db);
     assert.ok(!('tree_path' in body));
   });
+  it('backfills a truthful source_context when the row has none（契約 §五 必帶）', () => {
+    const db = makeDb();
+    db.prepare('INSERT INTO papers (id, title, tree_node_id) VALUES (?,?,?)').run('p1', 'Cloud Paper', null);
+    const withPaper = buildInsightPayload(seedInsight(db, { source_paper_id: 'p1', source_context: '' }), db);
+    assert.strictEqual(withPaper.source_context, '出自《Cloud Paper》（提取時未保留對話片段）');
+    const orphan = buildInsightPayload(seedInsight(db, { source_paper_id: null, source_context: null }), db);
+    assert.strictEqual(orphan.source_context, '（存量洞察，來源上下文未保留）');
+    const kept = buildInsightPayload(seedInsight(db, { source_paper_id: 'p1', source_context: '[user] 原話片段' }), db);
+    assert.strictEqual(kept.source_context, '[user] 原話片段');
+  });
 });
 
 describe('syncInsight', () => {
