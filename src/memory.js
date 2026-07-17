@@ -2,6 +2,7 @@ import { nanoid } from 'nanoid';
 import db from './db.js';
 import { log } from './logger.js';
 import { getChatConfig } from './ai.js';
+import { syncInsightFireAndForget } from './gateway.js';
 
 const EXTRACT_PROMPT = `你是一位科研記憶提取助手。
 以下是用戶與 AI 科研導師討論一篇學術論文的對話記錄。請從對話中提取可長期保存的結構化記憶條目。
@@ -21,9 +22,9 @@ const EXTRACT_PROMPT = `你是一位科研記憶提取助手。
 
 ### 規則
 
-- 只提取用戶在對話中**明確說出**或**明確同意**的內容
+- 只提取用戶在對話中**明確說出**或**明確同意**的內容（user-only：AI 單方面的展開不算記憶）
 - **嚴禁捏造**：不要添加對話中沒有出現的人名、論文、數據、結論
-- 不要從系統提示詞中提取條目
+- 不要從系統提示詞中提取條目（已知系統設定不得被反覆萃成記憶）
 - 不要提取短暫情緒、日常寒暄
 - fact 必須有明確的知識內容，不要提取「用戶問了一個關於 X 的問題」
 - hypothesis 必須包含「推測」「假設」「可能」「待驗證」「懸而未決」等語境
@@ -221,6 +222,10 @@ export async function extractInsights(paperId) {
       paperId,
       sourceContext
     );
+
+    // outbox（契約 §五）：本地寫入成功後 fire-and-forget 出海到 gateway。
+    // 絕不 await、絕不阻塞閱讀主流程；失敗留 synced_at IS NULL 靠啟動補傳。
+    syncInsightFireAndForget(db.prepare('SELECT * FROM insights WHERE id = ?').get(id));
 
     log('INFO', `記憶提取: ${paperId} → [${dimension}] ${entry.content.slice(0, 60)}`);
     created.push({
