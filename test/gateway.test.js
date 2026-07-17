@@ -29,7 +29,9 @@ function seedInsight(db, over = {}) {
   db.prepare(`INSERT INTO insights (id, dimension, title, content, source_paper_id, source_context, tags_json)
     VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
     id, over.dimension || '概念', over.title || '標題', over.content || '低雲反饋影響氣候敏感度',
-    over.source_paper_id || null, over.source_context || 'ctx', over.tags_json || '[]'
+    over.source_paper_id || null,
+    'source_context' in over ? over.source_context : 'ctx', // 顯式 ''/null 要能穿透（測兜底用）
+    over.tags_json || '[]'
   );
   return db.prepare('SELECT * FROM insights WHERE id = ?').get(id);
 }
