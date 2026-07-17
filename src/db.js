@@ -117,18 +117,42 @@ db.exec(`
     VALUES (new.rowid, new.title, new.content, new.source_context);
   END;
 
+  -- 注意：insights_fts 是普通（非 external-content）FTS5 表——刪除/更新用正規
+  -- DELETE FROM，絕不能用 'delete' 特殊命令（那是 content= 表專屬，普通表必炸
+  -- "SQL logic error"。2026-07-17 踩過：所有 UPDATE insights 全掛，同步回填因此全軍覆沒）。
   CREATE TRIGGER IF NOT EXISTS insights_fts_ad AFTER DELETE ON insights BEGIN
-    INSERT INTO insights_fts(insights_fts, rowid, title, content, source_context)
-    VALUES ('delete', old.rowid, old.title, old.content, old.source_context);
+    DELETE FROM insights_fts WHERE rowid = old.rowid;
   END;
 
   CREATE TRIGGER IF NOT EXISTS insights_fts_au AFTER UPDATE ON insights BEGIN
-    INSERT INTO insights_fts(insights_fts, rowid, title, content, source_context)
-    VALUES ('delete', old.rowid, old.title, old.content, old.source_context);
+    DELETE FROM insights_fts WHERE rowid = old.rowid;
     INSERT INTO insights_fts(rowid, title, content, source_context)
     VALUES (new.rowid, new.title, new.content, new.source_context);
   END;
 `);
+
+// ── 遷移：修復 2026-07-17 前建的庫裡帶 'delete' 特殊命令的壞觸發器 ──
+// CREATE TRIGGER IF NOT EXISTS 不會替換既有壞觸發器，這裡按內容檢測後重建。
+{
+  const bad = db.prepare(
+    "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND name IN ('insights_fts_ad','insights_fts_au') AND sql LIKE '%''delete''%'"
+  ).all();
+  if (bad.length > 0) {
+    db.exec(`
+      DROP TRIGGER IF EXISTS insights_fts_ad;
+      DROP TRIGGER IF EXISTS insights_fts_au;
+      CREATE TRIGGER insights_fts_ad AFTER DELETE ON insights BEGIN
+        DELETE FROM insights_fts WHERE rowid = old.rowid;
+      END;
+      CREATE TRIGGER insights_fts_au AFTER UPDATE ON insights BEGIN
+        DELETE FROM insights_fts WHERE rowid = old.rowid;
+        INSERT INTO insights_fts(rowid, title, content, source_context)
+        VALUES (new.rowid, new.title, new.content, new.source_context);
+      END;
+    `);
+    console.log(`[DB] migrated ${bad.length} broken insights_fts trigger(s) ('delete' command → DELETE FROM)`);
+  }
+}
 
 // Backfill existing insights into FTS index (idempotent)
 db.exec(`
