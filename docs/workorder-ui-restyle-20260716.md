@@ -1,7 +1,7 @@
 # 工單：co-reading 界面改造——對齊 research-gateway 設計語言
 
 日期：2026-07-16　狀態：實作中
-設計依據：`~/research-stack/gateway-styles-and-brief/project/Co-Reading.dc.html`（Claude Design 交接包，瞳瞳已拍板視覺）
+設計依據：Claude Design 交接包（設計稿，使用者已拍板視覺）
 
 ## 背景與動機
 co-reading 現在是 Tailwind 預設灰，跟導師系統（research-gateway 前端，暖紙色＋赤陶橘）視覺割裂。她要兩系統統一。設計原型已產出並經她認可。

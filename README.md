@@ -1,5 +1,7 @@
 # Co-Reading
 
+> **按原樣提供，不承諾支援。** Provided as-is, no support guaranteed.
+
 AI 論文共讀系統。上傳 PDF → AI 通讀生成結構化摘要 → 討論論文 → 自動提取洞察 → 建立跨論文知識網絡。
 
 > **全景手冊**：co-reading（洞察生產端）與 research-gateway（導師/記憶消費端）的跨系統傘狀總覽——
