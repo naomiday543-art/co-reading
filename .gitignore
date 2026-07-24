@@ -1,6 +1,7 @@
 node_modules/
 dist/
 data/
+books/
 .env
 release/
 *.dmg
