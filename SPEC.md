@@ -738,7 +738,7 @@ GET /api/logs?lines=100
 
 ## 十二、後續整合（不在本次範圍，僅供參考）
 
-本項目後續會與 research-gateway（`eliasandkitten.top/research/`）整合：
+本項目後續會與 research-gateway（`your-domain.example/research/`）整合：
 - AI 調用改為走 research-gateway 的多 API 池
 - 論文記憶接入 Ombre Brain
 - 知識庫接入 research-gateway 的語義搜索

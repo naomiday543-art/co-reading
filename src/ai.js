@@ -2,6 +2,8 @@ import { getSetting, getSettings } from './db.js';
 import db from './db.js';
 import { log } from './logger.js';
 import { searchInsights } from './search.js';
+import { readFileSync, statSync } from 'fs';
+import { renderVisualPages } from './pdf.js';
 
 function resolveConfig(prefix) {
   const dbSettings = getSettings();
@@ -9,12 +11,16 @@ function resolveConfig(prefix) {
   const baseUrl = dbSettings[`${prefix}_base_url`] || process.env[`${prefix.toUpperCase()}_BASE_URL`];
   const model = dbSettings[`${prefix}_model`] || process.env[`${prefix.toUpperCase()}_MODEL`];
   const format = dbSettings[`${prefix}_format`] || process.env[`${prefix.toUpperCase()}_FORMAT`];
+  const visionMode = dbSettings[`${prefix}_vision_mode`] || process.env[`${prefix.toUpperCase()}_VISION_MODE`];
+  const visionModel = dbSettings[`${prefix}_vision_model`] || process.env[`${prefix.toUpperCase()}_VISION_MODEL`];
 
   return {
     key,
     baseUrl,
     model,
-    format: format || 'openai',
+    format,
+    visionMode,
+    visionModel,
   };
 }
 
@@ -25,34 +31,21 @@ export function getChatConfig() {
     baseUrl: config.baseUrl || 'https://api.openai.com/v1',
     model: config.model || 'gpt-4o',
     format: config.format || 'openai',
+    visionMode: config.visionMode || 'auto',
   };
 }
 
 export function getAnalyzeConfig() {
-  let config = resolveConfig('analyze');
-
-  // Fall back to main AI config if analyze config is not set
-  if (!config.key && !config.baseUrl && !config.model) {
-    config = resolveConfig('ai');
-  }
-  if (!config.key) {
-    const mainConfig = resolveConfig('ai');
-    config.key = mainConfig.key;
-  }
-  if (!config.baseUrl) {
-    const mainConfig = resolveConfig('ai');
-    config.baseUrl = mainConfig.baseUrl;
-  }
-  if (!config.model) {
-    const mainConfig = resolveConfig('ai');
-    config.model = mainConfig.model;
-  }
+  const config = resolveConfig('analyze');
+  const mainConfig = resolveConfig('ai');
 
   return {
-    key: config.key || '',
-    baseUrl: config.baseUrl || 'https://api.openai.com/v1',
-    model: config.model || 'gpt-4o',
-    format: config.format || 'openai',
+    key: config.key || mainConfig.key || '',
+    baseUrl: config.baseUrl || mainConfig.baseUrl || 'https://api.openai.com/v1',
+    model: config.model || mainConfig.model || 'gpt-4o',
+    format: config.format || mainConfig.format || 'openai',
+    visionMode: config.visionMode || mainConfig.visionMode || 'auto',
+    visionModel: config.visionModel || config.model || mainConfig.model || 'gpt-4o',
   };
 }
 
@@ -70,15 +63,66 @@ function buildHeaders({ key, format }) {
   };
 }
 
-function buildBody({ model, format }, { messages, stream, max_tokens, temperature }) {
+export function serializeContent(content, format) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+
+  if (format === 'anthropic') {
+    return content.map(part => {
+      if (part.type === 'text') {
+        return {
+          type: 'text',
+          text: part.text || '',
+          ...(part.cache_control ? { cache_control: part.cache_control } : {}),
+        };
+      }
+      if (part.type === 'image') {
+        return {
+          type: 'image',
+          source: { type: 'base64', media_type: part.mediaType, data: part.data },
+        };
+      }
+      if (part.type === 'document') {
+        return {
+          type: 'document',
+          source: { type: 'base64', media_type: part.mediaType, data: part.data },
+          ...(part.title ? { title: part.title } : {}),
+        };
+      }
+      return part;
+    });
+  }
+
+  return content.flatMap(part => {
+    if (part.type === 'text') return [{ type: 'text', text: part.text || '' }];
+    if (part.type === 'image') {
+      return [{
+        type: 'image_url',
+        image_url: { url: `data:${part.mediaType};base64,${part.data}`, detail: 'high' },
+      }];
+    }
+    // Chat Completions has no portable PDF content part. Callers should render
+    // PDF pages to images before reaching this boundary.
+    return [];
+  });
+}
+
+export function isVisionEnabled(config) {
+  if (config.visionMode === 'on') return true;
+  if (config.visionMode === 'off') return false;
+  const target = `${config.model || ''} ${config.baseUrl || ''}`.toLowerCase();
+  return /claude|vision|gpt-4o|gpt-4\.1|gpt-5|gemini/.test(target);
+}
+
+export function buildBody({ model, format }, { messages, stream, max_tokens, temperature }) {
   if (format === 'anthropic') {
     let system = null;
     const chatMessages = [];
     for (const m of messages) {
       if (m.role === 'system') {
-        system = m.content;
+        system = serializeContent(m.content, 'anthropic');
       } else {
-        chatMessages.push({ role: m.role, content: m.content });
+        chatMessages.push({ role: m.role, content: serializeContent(m.content, 'anthropic') });
       }
     }
     const body = {
@@ -94,14 +138,14 @@ function buildBody({ model, format }, { messages, stream, max_tokens, temperatur
 
   return {
     model,
-    messages,
+    messages: messages.map(m => ({ ...m, content: serializeContent(m.content, 'openai') })),
     max_tokens: max_tokens || 4096,
     stream: stream || false,
     temperature: temperature !== undefined ? temperature : 0.7,
   };
 }
 
-function buildEndpoint({ baseUrl, format }) {
+export function buildEndpoint({ baseUrl, format }) {
   const base = baseUrl.replace(/\/$/, '');
   if (format === 'anthropic') {
     return `${base}/messages`;
@@ -191,9 +235,69 @@ async function* streamOpenAI(response) {
   }
 }
 
-export async function analyzePaper(fullText) {
+function responseText(config, data) {
+  if (config.format === 'anthropic') {
+    return data.content?.filter(part => part.type === 'text').map(part => part.text || '').join('').trim() || '';
+  }
+  return data.choices?.[0]?.message?.content || '';
+}
+
+async function buildAnalyzeUserContent(config, fullText, pdfPath) {
+  const text = fullText.length > 100000 ? `${fullText.slice(0, 100000)}\n[全文已截斷]` : fullText;
+  if (!pdfPath || !isVisionEnabled(config)) return text;
+
+  if (config.format === 'anthropic') {
+    const bytes = statSync(pdfPath).size;
+    // Anthropic's standard request ceiling is 32 MB including base64 overhead.
+    if (bytes <= 22 * 1024 * 1024) {
+      return [
+        {
+          type: 'document',
+          mediaType: 'application/pdf',
+          data: readFileSync(pdfPath).toString('base64'),
+          title: 'paper.pdf',
+        },
+        { type: 'text', text: '請通讀這份論文，圖、表、頁面布局與正文都要納入分析。' },
+      ];
+    }
+  }
+
+  try {
+    const visualPages = await renderVisualPages(pdfPath, { maxPages: 8, dpi: 120 });
+    if (visualPages.length > 0) {
+      const visionConfig = { ...config, model: config.visionModel || config.model };
+      const response = await makeRequest(visionConfig, {
+        messages: [
+          {
+            role: 'system',
+            content: '你是科研圖表審讀助手。只描述圖片中可驗證的圖、表、座標、圖例、數值趨勢與頁碼；不要推測看不清的內容。',
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: '逐頁讀取以下論文圖表頁，輸出帶頁碼的視覺證據筆記，供另一個模型和正文交叉驗證。' },
+              ...visualPages,
+            ],
+          },
+        ],
+        max_tokens: 3000,
+        temperature: 0.1,
+        stream: false,
+      });
+      const visualNotes = responseText(visionConfig, await response.json());
+      if (visualNotes) {
+        return `${text}\n\n[視覺模型對圖表頁的證據筆記]\n${visualNotes}\n\n請把上述視覺筆記與正文交叉驗證；若衝突，以明確可核對的原文與圖表為準。`;
+      }
+    }
+  } catch (err) {
+    log('WARN', `PDF 視覺通讀失敗，降級為純文字通讀: ${err.message}`);
+  }
+  return text;
+}
+
+export async function analyzePaper(fullText, { pdfPath } = {}) {
   const config = getAnalyzeConfig();
-  const text = fullText.length > 100000 ? fullText.slice(0, 100000) + '\n[全文已截斷]' : fullText;
+  const userContent = await buildAnalyzeUserContent(config, fullText, pdfPath);
 
   const messages = [
     {
@@ -212,7 +316,7 @@ export async function analyzePaper(fullText) {
   "limitations": "局限性（1-3 句）"
 }`,
     },
-    { role: 'user', content: text },
+    { role: 'user', content: userContent },
   ];
 
   const response = await makeRequest(config, {
@@ -227,17 +331,9 @@ export async function analyzePaper(fullText) {
   try {
     json = JSON.parse(raw);
   } catch {
-    // Try to extract from response
+    throw new Error('AI API 返回的外層 JSON 無法解析: ' + raw.slice(0, 200));
   }
-
-  let content;
-  if (config.format === 'anthropic') {
-    json = JSON.parse(raw);
-    content = json.content?.[0]?.text || '';
-  } else {
-    json = JSON.parse(raw);
-    content = json.choices?.[0]?.message?.content || '';
-  }
+  const content = responseText(config, json);
 
   // Try to parse the content as JSON (it might have markdown code blocks)
   let result;

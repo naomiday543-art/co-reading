@@ -1,9 +1,10 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { dataPaths } from './paths.js';
 
-const LOG_PATH = new URL('../data/app.log', import.meta.url).pathname;
+const LOG_PATH = dataPaths.logPath;
 const MAX_LINES = 1000;
 
-mkdirSync(new URL('../data', import.meta.url).pathname, { recursive: true });
+mkdirSync(dataPaths.dataDir, { recursive: true });
 
 if (!existsSync(LOG_PATH)) {
   writeFileSync(LOG_PATH, '');

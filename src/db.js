@@ -1,14 +1,12 @@
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { dataPaths } from './paths.js';
 
 // CO_READING_DB_PATH：測試專用逃生口（見 test/db-fts-triggers.test.js）——讓回歸測試
 // 能用「真實 schema + 真實遷移」跑在 temp DB 上，而不碰 data/co-reading.db。生產不設。
 const dbPath = process.env.CO_READING_DB_PATH
-  || new URL('../data/co-reading.db', import.meta.url).pathname;
+  || dataPaths.dbPath;
 mkdirSync(dirname(dbPath), { recursive: true });
 const db = new Database(dbPath);
 

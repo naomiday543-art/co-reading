@@ -10,9 +10,10 @@ describe('Chat Routes', () => {
 
   before(async () => {
     // Start the server on a random port for tests
-    const { default: app } = await import('../src/server.js');
+    const { startServer } = await import('../src/server.js');
     await new Promise((resolve) => {
-      server = app.listen(0, () => {
+      server = startServer(0, '127.0.0.1');
+      server.once('listening', () => {
         baseUrl = `http://127.0.0.1:${server.address().port}`;
         resolve();
       });

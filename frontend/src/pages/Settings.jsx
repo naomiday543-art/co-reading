@@ -17,6 +17,8 @@ export default function Settings() {
   const [analyzeBaseUrl, setAnalyzeBaseUrl] = useState('');
   const [analyzeApiKey, setAnalyzeApiKey] = useState('');
   const [analyzeModel, setAnalyzeModel] = useState('');
+  const [analyzeVisionModel, setAnalyzeVisionModel] = useState('');
+  const [analyzeVisionMode, setAnalyzeVisionMode] = useState('auto');
 
   // Logs
   const [logs, setLogs] = useState([]);
@@ -40,6 +42,8 @@ export default function Settings() {
         setAnalyzeBaseUrl(saved.advanced.analyzeBaseUrl || '');
         setAnalyzeApiKey(saved.advanced.analyzeApiKey || '');
         setAnalyzeModel(saved.advanced.analyzeModel || '');
+        setAnalyzeVisionModel(saved.advanced.analyzeVisionModel || '');
+        setAnalyzeVisionMode(saved.advanced.analyzeVisionMode || 'auto');
       }
     } catch {}
 
@@ -60,10 +64,12 @@ export default function Settings() {
     setChatFormat(defaults.format);
     setChatBaseUrl(defaults.base_url);
     setChatModel(defaults.model);
-    setAnalyzeFormat('openai');
-    setAnalyzeBaseUrl('');
+    setAnalyzeFormat(defaults.format);
+    setAnalyzeBaseUrl(defaults.base_url);
     setAnalyzeApiKey('');
-    setAnalyzeModel('');
+    setAnalyzeModel(defaults.analyze_model || defaults.model);
+    setAnalyzeVisionModel(defaults.vision_model || '');
+    setAnalyzeVisionMode(defaults.vision_mode || 'auto');
   };
 
   const saveSettings = async () => {
@@ -76,7 +82,7 @@ export default function Settings() {
     const settings = {
       provider,
       apiKey,
-      advanced: { chatFormat, chatBaseUrl, chatModel, analyzeFormat, analyzeBaseUrl, analyzeApiKey, analyzeModel },
+      advanced: { chatFormat, chatBaseUrl, chatModel, analyzeFormat, analyzeBaseUrl, analyzeApiKey, analyzeModel, analyzeVisionModel, analyzeVisionMode },
     };
     localStorage.setItem('co-reading-settings', JSON.stringify(settings));
 
@@ -89,8 +95,10 @@ export default function Settings() {
         ai_format: format,
         analyze_api_key: advancedOpen && analyzeApiKey ? analyzeApiKey : apiKey,
         analyze_base_url: advancedOpen && analyzeBaseUrl ? analyzeBaseUrl : baseUrl,
-        analyze_model: advancedOpen && analyzeModel ? analyzeModel : model,
-        analyze_format: advancedOpen ? analyzeFormat : 'openai',
+        analyze_model: advancedOpen && analyzeModel ? analyzeModel : (defaults.analyze_model || model),
+        analyze_format: advancedOpen ? analyzeFormat : format,
+        analyze_vision_model: advancedOpen && analyzeVisionModel ? analyzeVisionModel : (defaults.vision_model || ''),
+        analyze_vision_mode: advancedOpen ? analyzeVisionMode : (defaults.vision_mode || 'auto'),
       });
     } catch (err) {
       console.error('Failed to save settings to backend:', err);
@@ -141,6 +149,7 @@ export default function Settings() {
     anthropic: { label: 'Anthropic (Claude)', url: 'console.anthropic.com' },
     openai: { label: 'OpenAI', url: 'platform.openai.com' },
     deepseek: { label: 'DeepSeek', url: 'platform.deepseek.com' },
+    opencode_go: { label: 'OpenCode Go', url: 'opencode.ai' },
     custom: { label: '其他（自定義）', url: null },
   };
 
@@ -301,6 +310,30 @@ export default function Settings() {
                       value={analyzeApiKey}
                       onChange={e => setAnalyzeApiKey(e.target.value)}
                       placeholder="留空 = 使用主 API Key"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-xs text-muted">圖表／識圖</label>
+                    <select
+                      className="w-full border border-border bg-surface-alt rounded-[10px] px-2 py-1.5 text-sm mt-0.5"
+                      value={analyzeVisionMode}
+                      onChange={e => setAnalyzeVisionMode(e.target.value)}
+                    >
+                      <option value="auto">自動偵測</option>
+                      <option value="on">啟用（PDF／圖表頁）</option>
+                      <option value="off">關閉（純文字）</option>
+                    </select>
+                    <p className="text-[11px] text-faint mt-1">
+                      Anthropic 直接讀 PDF；OpenAI-compatible 會選取含 Figure／Table 的頁面轉成圖片。
+                    </p>
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-xs text-muted">識圖模型（留空則使用通讀模型）</label>
+                    <input
+                      className="w-full border border-border bg-surface-alt rounded-[10px] px-2 py-1.5 text-sm mt-0.5 cr-mono"
+                      value={analyzeVisionModel}
+                      onChange={e => setAnalyzeVisionModel(e.target.value)}
+                      placeholder="deepseek-v4-flash-vision-exp"
                     />
                   </div>
                 </div>

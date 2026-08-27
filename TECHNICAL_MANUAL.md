@@ -211,8 +211,9 @@ CREATE VIRTUAL TABLE insights_fts USING fts5(
 ### 6.2 `ai.js`
 - `getChatConfig()` / `getAnalyzeConfig()` — 從 settings 表或環境變量解析（DB > env）
 - `buildHeaders / buildBody / buildEndpoint` — 雙 wire format 切換的核心
+- `serializeContent` — canonical `text/image/document` content parts 轉 Anthropic blocks 或 OpenAI Chat content parts
 - `streamAnthropic / streamOpenAI` — async generator 統一 streaming 介面
-- `analyzePaper(fullText)` — non-streaming，要求模型輸出嚴格 JSON 結構化摘要
+- `analyzePaper(fullText, {pdfPath})` — non-streaming，要求模型輸出嚴格 JSON 結構化摘要；Anthropic 原生讀 PDF，OpenAI-compatible 採「識圖模型證據筆記 → 通讀模型綜合」兩階段
 - `chatAboutPaper(paper, history, userMessage, onChunk)` — 主對話入口
   - 系統 prompt 分兩段：stable（含全文）+ variable（注入的 insights）
   - Anthropic format 時對 stable 段加 `cache_control: ephemeral`，第二輪起 prompt cache 生效

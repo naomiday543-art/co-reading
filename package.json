@@ -1,6 +1,6 @@
 {
   "name": "co-reading",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "AI 論文共讀系統 — 上傳 PDF、AI 通讀、討論論文、自動提取洞察",
   "type": "module",
   "main": "electron.js",
@@ -12,10 +12,10 @@
     "dist:mac": "npm run electron:rebuild && npm run build && electron-builder --mac",
     "dist:win": "npm run electron:rebuild && npm run build && electron-builder --win",
     "electron:rebuild": "electron-rebuild -f -w better-sqlite3",
-    "test": "node --test test/*.test.js"
+    "test": "node --import ./test/setup-data-dir.js --test test/*.test.js"
   },
   "build": {
-    "appId": "top.eliasandkitten.co-reading",
+    "appId": "com.example.coreading",
     "productName": "Co-Reading",
     "files": [
       "electron.js",
