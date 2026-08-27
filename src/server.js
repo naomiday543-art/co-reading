@@ -10,13 +10,14 @@ import tagsRouter from './routes/tags.js';
 import treeRouter from './routes/tree.js';
 import insightsRouter from './routes/insights.js';
 import { getSetting, setSetting, getSettings } from './db.js';
+import { dataPaths } from './paths.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3456;
 
 const app = express();
 
-mkdirSync(new URL('../data/pdfs', import.meta.url).pathname, { recursive: true });
+mkdirSync(dataPaths.pdfDir, { recursive: true });
 
 app.use(express.json());
 
@@ -40,6 +41,7 @@ app.put('/api/settings', (req, res) => {
   const fields = [
     'ai_api_key', 'ai_base_url', 'ai_model', 'ai_format',
     'analyze_api_key', 'analyze_base_url', 'analyze_model', 'analyze_format',
+    'analyze_vision_mode', 'analyze_vision_model',
     'gateway_url', 'gateway_token', // 洞察出海到 research-gateway（契約 §二 M3.b）
   ];
   for (const key of fields) {
@@ -79,15 +81,22 @@ if (existsSync(distPath)) {
   });
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1].replace(/^file:\/\//, '');
-if (isMain) {
-  app.listen(PORT, () => {
-    log('INFO', `Co-Reading 服務已啟動，端口 ${PORT}`);
+export function startServer(port = PORT, host) {
+  const server = app.listen(port, host, () => {
+    const address = server.address();
+    const listeningPort = typeof address === 'object' && address ? address.port : port;
+    log('INFO', `Co-Reading 服務已啟動，端口 ${listeningPort}`);
     // 啟動補傳（契約 §五）：撈 synced_at IS NULL 的洞察重送。fire-and-forget，不阻塞啟動。
     import('./gateway.js')
       .then(({ flushUnsynced }) => flushUnsynced())
       .catch((e) => log('WARN', `啟動補傳失敗: ${e.message}`));
   });
+  return server;
+}
+
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1].replace(/^file:\/\//, '');
+if (isMain) {
+  startServer(PORT);
 }
 
 export default app;

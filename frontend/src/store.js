@@ -47,10 +47,11 @@ export const useStore = create((set, get) => ({
 }));
 
 const providerDefaults = {
-  anthropic: { base_url: 'https://api.anthropic.com/v1', format: 'anthropic', model: 'claude-sonnet-4-6' },
-  openai: { base_url: 'https://api.openai.com/v1', format: 'openai', model: 'gpt-4o' },
-  deepseek: { base_url: 'https://api.deepseek.com/v1', format: 'openai', model: 'deepseek-chat' },
-  custom: { base_url: '', format: 'openai', model: '' },
+  anthropic: { base_url: 'https://api.anthropic.com/v1', format: 'anthropic', model: 'claude-sonnet-4-6', analyze_model: 'claude-sonnet-4-6', vision_model: 'claude-sonnet-4-6', vision_mode: 'auto' },
+  openai: { base_url: 'https://api.openai.com/v1', format: 'openai', model: 'gpt-4o', analyze_model: 'gpt-4o', vision_model: 'gpt-4o', vision_mode: 'auto' },
+  deepseek: { base_url: 'https://api.deepseek.com/v1', format: 'openai', model: 'deepseek-chat', analyze_model: 'deepseek-chat', vision_model: '', vision_mode: 'off' },
+  opencode_go: { base_url: 'https://opencode.ai/zen/go/v1', format: 'openai', model: 'deepseek-v4-pro', analyze_model: 'deepseek-v4-pro', vision_model: 'deepseek-v4-flash-vision-exp', vision_mode: 'on' },
+  custom: { base_url: '', format: 'openai', model: '', analyze_model: '', vision_model: '', vision_mode: 'auto' },
 };
 
 export function getProviderDefaults(provider) {

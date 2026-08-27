@@ -8,11 +8,12 @@ import { extractPDF } from '../pdf.js';
 import { analyzePaper } from '../ai.js';
 import { log } from '../logger.js';
 import { extractInsights } from '../memory.js';
+import { dataPaths } from '../paths.js';
 
 const router = Router();
 
 const storage = multer.diskStorage({
-  destination: new URL('../../data/pdfs', import.meta.url).pathname,
+  destination: dataPaths.pdfDir,
   filename: (_req, file, cb) => {
     const id = nanoid();
     const ext = file.originalname.split('.').pop() || 'pdf';
@@ -74,12 +75,17 @@ async function triggerAnalyze(paperId) {
     log('INFO', `開始 AI 通讀: ${paperId}`);
 
     const startTime = Date.now();
-    const paper = db.prepare('SELECT full_text FROM papers WHERE id = ?').get(paperId);
+    const paper = db.prepare('SELECT full_text, pdf_filename FROM papers WHERE id = ?').get(paperId);
     if (!paper || !paper.full_text) {
       throw new Error('論文沒有全文');
     }
 
-    const summary = await analyzePaper(paper.full_text);
+    const pdfPath = paper.pdf_filename
+      ? join(dataPaths.pdfDir, paper.pdf_filename)
+      : null;
+    const summary = await analyzePaper(paper.full_text, {
+      pdfPath: pdfPath && existsSync(pdfPath) ? pdfPath : undefined,
+    });
 
     db.prepare(`UPDATE papers SET
       title = CASE WHEN title = '' OR title IS NULL THEN ? ELSE title END,
@@ -215,7 +221,7 @@ router.delete('/:id', (req, res) => {
 
   // Delete PDF file
   if (paper.pdf_filename) {
-    const pdfPath = join(new URL('../../data/pdfs', import.meta.url).pathname, paper.pdf_filename);
+    const pdfPath = join(dataPaths.pdfDir, paper.pdf_filename);
     try {
       if (existsSync(pdfPath)) unlinkSync(pdfPath);
     } catch {}
@@ -231,7 +237,7 @@ router.get('/:id/pdf', (req, res) => {
   const paper = db.prepare('SELECT pdf_filename FROM papers WHERE id = ?').get(req.params.id);
   if (!paper?.pdf_filename) return res.status(404).json({ error: 'PDF not found' });
 
-  const pdfPath = join(new URL('../../data/pdfs', import.meta.url).pathname, paper.pdf_filename);
+  const pdfPath = join(dataPaths.pdfDir, paper.pdf_filename);
   if (!existsSync(pdfPath)) return res.status(404).json({ error: 'PDF file not found on disk' });
 
   res.setHeader('Content-Type', 'application/pdf');
