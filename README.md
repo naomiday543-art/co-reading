@@ -1,5 +1,9 @@
 # Co-Reading
 
+<p align="center">
+  <img src="build/icon.png" alt="Co-Reading icon" width="144" height="144">
+</p>
+
 AI 論文共讀系統：上傳 PDF、通讀正文與圖表、生成結構化摘要、圍繞全文討論、自動提取洞察，並建立跨論文知識網絡。
 
 支援 Anthropic Messages API 與 OpenAI Chat Completions-compatible API；內建 Anthropic、OpenAI、DeepSeek、OpenCode Go 與自定義供應商預設。
@@ -232,8 +236,8 @@ GitHub Actions 會先執行完整測試，再分別建立 macOS 與 Windows 安�
 ```bash
 npm test
 npm run build
-git tag v1.1.0
-git push origin v1.1.0
+git tag v1.1.1
+git push origin v1.1.1
 ```
 
 建立 tag 前應先把發布提交合併到 `main`，並確認 `package.json` 的版本與 tag 一致。提交、推送與建立 Release 不會由應用程式自動執行。

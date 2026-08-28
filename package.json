@@ -1,6 +1,6 @@
 {
   "name": "co-reading",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "AI 論文共讀系統 — 上傳 PDF、AI 通讀、討論論文、自動提取洞察",
   "type": "module",
   "main": "electron.js",
@@ -27,9 +27,11 @@
     ],
     "mac": {
       "category": "public.app-category.education",
+      "icon": "build/icon.icns",
       "target": ["dmg", "zip"]
     },
     "win": {
+      "icon": "build/icon.ico",
       "target": ["nsis"]
     },
     "asarUnpack": [
