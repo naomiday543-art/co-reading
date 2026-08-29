@@ -126,6 +126,12 @@ PORT=3456
 - `anthropic`: `POST /messages`，用 `x-api-key` header，body 格式 `{model, max_tokens, system, messages}`
 - `openai`: `POST /chat/completions`，用 `Authorization: Bearer` header，body 格式 `{model, messages, stream}`
 
+可選的 research-gateway normalized OpenAI-compatible 介面沿用 `openai` 分支，不需要在 Coreading 增加第二套代理或配額層：
+
+- 本機 base URL：`http://127.0.0.1:8788/v1`
+- 部署後 base URL：`https://your-domain.example/research/v1`
+- `AI_API_KEY` 使用 Gateway 現有 `PROXY_API_KEY`；`AI_BASE_URL` 不含 `/chat/completions`，客戶端會自動補上。
+
 ---
 
 ## 四、數據模型（SQLite）
