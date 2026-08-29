@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { streamChat, regenerateChat, continueChat, papersApi } from '../api';
+import CarryoverPanel from './CarryoverPanel';
 
 export function switchVersion(messages, messageId, direction) {
   return messages.map(m => {
@@ -247,6 +248,9 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="text-accent"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
         討論
       </h3>
+
+      {/* 研究續窗：精煉按鈕 + carryover 卡片（手動觸發/手動帶上，拍板 #1/#3） */}
+      <CarryoverPanel paperId={paperId} messageCount={messages.length} />
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto space-y-3 mb-3 min-h-0">

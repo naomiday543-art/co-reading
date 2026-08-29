@@ -8,7 +8,7 @@ import { extractPDF } from '../pdf.js';
 import { analyzePaper } from '../ai.js';
 import { log } from '../logger.js';
 import { extractInsights } from '../memory.js';
-import { requestRefine, fetchCarryover, getCachedCarryover, sessionKeyFor, isCarryoverInjected, setCarryoverInjected } from '../carryover.js';
+import { requestRefine, fetchCarryover, fetchClaimProvenance, getCachedCarryover, sessionKeyFor, isCarryoverInjected, setCarryoverInjected } from '../carryover.js';
 import { dataPaths } from '../paths.js';
 
 const router = Router();
@@ -322,6 +322,15 @@ router.post('/:id/carryover/inject', (req, res) => {
   const enabled = Boolean(req.body?.enabled);
   setCarryoverInjected(paper.id, enabled);
   res.json({ ok: true, paper_id: paper.id, injected: enabled });
+});
+
+// GET /api/papers/:id/claims/:claimId/provenance —— 溯源代理（前端不直連 gateway）
+router.get('/:id/claims/:claimId/provenance', async (req, res) => {
+  const paper = db.prepare('SELECT id FROM papers WHERE id = ?').get(req.params.id);
+  if (!paper) return res.status(404).json({ error: '論文不存在' });
+  const result = await fetchClaimProvenance(req.params.claimId);
+  if (!result.ok) return res.status(502).json({ error: `溯源失敗：${result.reason}` });
+  res.json(result.provenance);
 });
 
 export default router;

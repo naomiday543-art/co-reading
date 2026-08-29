@@ -163,6 +163,22 @@ export async function fetchCarryover(sessionKey, { database = db, fetchImpl = fe
   }
 }
 
+/** 向 gateway 拉一條 claim 的溯源（provenance）——前端經 co-reading 後端代理，不直連 gateway。 */
+export async function fetchClaimProvenance(claimId, { fetchImpl = fetch, config = getGatewayConfig() } = {}) {
+  if (!config || !config.url) return { ok: false, reason: 'gateway not configured' };
+  try {
+    const res = await fetchImpl(`${config.url}/claims/${encodeURIComponent(claimId)}/provenance`, {
+      headers: config.token ? { Authorization: `Bearer ${config.token}` } : {},
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!res.ok) return { ok: false, reason: `http ${res.status}` };
+    return { ok: true, provenance: await res.json() };
+  } catch (e) {
+    log('WARN', `拉取 provenance 異常 ${claimId}: ${e.message}`);
+    return { ok: false, reason: e.message };
+  }
+}
+
 // ── 注入渲染（§5.3：結構化摘要，每段最多 N 條、每條一行、必帶 origin 標記）──
 
 const ORIGIN_LABELS = {

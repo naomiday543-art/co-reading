@@ -40,6 +40,13 @@ export const papersApi = {
     request(`/papers/${paperId}/chat/edit`, { method: 'POST', body: { msg_id: msgId, content } }),
   switchBranch: (paperId, forkId, branchId) =>
     request(`/papers/${paperId}/chat/branch/switch`, { method: 'POST', body: { fork_id: forkId, branch_id: branchId } }),
+  refine: (paperId) => request(`/papers/${paperId}/refine`, { method: 'POST' }),
+  getCarryover: (paperId, { refresh = false } = {}) =>
+    request(`/papers/${paperId}/carryover${refresh ? '?refresh=1' : ''}`),
+  setCarryoverInject: (paperId, enabled) =>
+    request(`/papers/${paperId}/carryover/inject`, { method: 'POST', body: { enabled } }),
+  claimProvenance: (paperId, claimId) =>
+    request(`/papers/${paperId}/claims/${claimId}/provenance`),
 };
 
 export const tagsApi = {
