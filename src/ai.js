@@ -4,6 +4,7 @@ import { log } from './logger.js';
 import { searchInsights } from './search.js';
 import { readFileSync, statSync } from 'fs';
 import { renderVisualPages } from './pdf.js';
+import { renderCarryoverForInjection } from './carryover.js';
 
 function resolveConfig(prefix) {
   const dbSettings = getSettings();
@@ -428,6 +429,16 @@ ${fullText}
     }
   } catch (err) {
     console.error('[INSIGHT-INJECT] failed:', err.message);
+  }
+
+  // 研究續窗（carryover）：手動「帶上」才注入（拍板 #1）。
+  // 只接在變動區（insightText 之後）——絕不能插進 stableSystem，否則每輪打掉 prompt cache。
+  // 注入的是結構化摘要（每條一行、必帶 origin 標記、衝突醒目），不是 transcript（紅線 8）。
+  try {
+    const carryoverText = renderCarryoverForInjection(paper.id);
+    if (carryoverText) insightText += carryoverText;
+  } catch (err) {
+    console.error('[CARRYOVER-INJECT] failed:', err.message);
   }
 
   // Build system: array with cache_control for anthropic, plain string for openai
