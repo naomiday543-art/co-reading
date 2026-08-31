@@ -1,108 +1,153 @@
 # Co-Reading
 
 <p align="center">
-  <img src="build/icon.png" alt="Co-Reading icon" width="144" height="144">
+  <img src="build/icon.png" alt="Co-Reading 图标" width="144" height="144">
 </p>
 
-AI 論文共讀系統：上傳 PDF、通讀正文與圖表、生成結構化摘要、圍繞全文討論、自動提取洞察，並建立跨論文知識網絡。
+> 一个在自己电脑上运行的 AI 论文共读工具。
 
-支援 Anthropic Messages API 與 OpenAI Chat Completions-compatible API；內建 Anthropic、OpenAI、DeepSeek、OpenCode Go 與自定義供應商預設。
+把 PDF 放进去，Co-Reading 会帮你提取正文、阅读图表、生成结构化摘要；你还可以围绕论文全文继续追问，把重要发现保存成洞察，并用知识树整理多篇文献。
 
-> **按原樣提供，不承諾支援。** Provided as-is, no support guaranteed.
+[下载最新版](https://github.com/naomiday543-art/co-reading/releases/latest) · [查看所有版本](https://github.com/naomiday543-art/co-reading/releases)
 
-## 安裝
+> **按原样提供，不承诺支持。** Provided as-is, no support guaranteed.
 
-### GitHub Release 桌面版
+## 它解决什么问题
 
-在 GitHub Releases 下載對應平台的安裝檔：
+普通 AI 聊天往往需要你反复上传论文、复制上下文，重要发现也容易散落在不同对话里。
+
+Co-Reading 把一次论文阅读拆成一条可以长期保留的流程：
+
+```text
+上传 PDF
+   ↓
+提取正文并分析图表
+   ↓
+生成背景 / 方法 / 结果 / 结论 / 局限摘要
+   ↓
+围绕全文继续讨论
+   ↓
+保存洞察、笔记、标注和阅读进度
+   ↓
+在其他论文中重新找到相关洞察
+```
+
+它适合个人研究、文献阅读和课题整理，不是文献数据库，也不能替代你核对原始论文。
+
+## 你可以用它做什么
+
+### 阅读论文
+
+- 拖入一个或多个 PDF。
+- 自动提取可搜索的正文。
+- 异步生成结构化摘要，不必一直停留在页面等待。
+- 在支持的模型下，把图片、图表和页面布局一并纳入分析。
+- 查看原文、添加标注，并记录每个章节的阅读进度。
+
+### 和论文对话
+
+- 每轮回答都可以使用当前论文全文作为上下文。
+- SSE 流式显示回答。
+- Anthropic 格式支持 prompt cache，减少重复发送全文的成本。
+- 可以编辑一条消息并从那里建立新的对话分支。
+
+### 积累研究洞察
+
+- 从讨论中提取 fact、hypothesis 等重要内容。
+- 按“概念、延伸、你的研究、闪回、共振、悬题”六个维度整理。
+- 使用 FTS5 trigram 搜索中英文混排内容。
+- 在阅读另一篇论文时找回相关洞察。
+
+### 整理资料
+
+- 用知识树建立多层分类。
+- 用标签跨目录管理论文。
+- 为每篇论文保存 Markdown 笔记。
+- 所有论文、消息、洞察和设置保存在本机 SQLite。
+
+## 安装
+
+### 方式一：桌面版
+
+从 [GitHub Releases](https://github.com/naomiday543-art/co-reading/releases/latest) 下载：
 
 - macOS：`.dmg`
 - Windows：`.exe`
 
-目前安裝包未做 Apple notarization 或 Windows code signing，系統可能顯示未驗證開發者／SmartScreen 提示。請只從本專案的 GitHub Releases 下載。
+当前安装包没有 Apple notarization 或 Windows code signing，系统可能显示“未验证的开发者”或 SmartScreen 提示。请只从本项目的 GitHub Releases 下载。
 
-應用資料（論文、資料庫、API 設定）保存在本機，不會打包進 Release。API Key 會保存在本機 SQLite 設定表中，請勿共享資料庫檔案。
+### 方式二：从源码运行
 
-### 從源碼執行
-
-需要 Node.js 22（與 GitHub Actions 建置環境一致）。
-
-## 快速開始
+需要 Node.js 22。
 
 ```bash
 npm install
-cp .env.example .env   # 填入 API key
-npm run dev            # 前後端同時啟動
+cp .env.example .env
+npm run dev
 ```
 
-前端 `http://localhost:5173/`，後端 `http://localhost:3456`。
+开发模式地址：
 
-其他常用命令：
+- 前端：`http://localhost:5173/`
+- 后端：`http://localhost:3456`
+
+常用命令：
 
 ```bash
-npm test       # 後端測試
-npm run build  # 前端 production build
-npm start      # 啟動後端；先執行 npm run build 才能提供前端頁面
+npm test       # 运行后端测试
+npm run build  # 构建前端
+npm start      # 启动后端；需要先完成前端构建
 npm run electron
 ```
 
-## 模型配置
+## 第一次使用
 
-最簡單的方式是在應用的「設定」頁選擇供應商並填入 API Key。也可以使用 `.env`：
+1. 打开“设置”。
+2. 选择 Anthropic、OpenAI、DeepSeek、OpenCode Go 或 Custom。
+3. 填入自己的 API Key 和模型名称。
+4. 点击连接测试。
+5. 回到文库，上传一篇带文字层的 PDF。
 
-```env
-AI_BASE_URL=https://api.anthropic.com/v1
-AI_API_KEY=sk-xxx
-AI_MODEL=claude-sonnet-4-6
-AI_FORMAT=anthropic
+Co-Reading 不提供模型订阅或共享额度。请求产生的费用、速率限制和内容政策由你选择的 AI 服务商决定。
 
-# 通讀模型（可選；留空時繼承主模型）
-ANALYZE_BASE_URL=https://api.deepseek.com/v1
-ANALYZE_API_KEY=sk-xxx
-ANALYZE_MODEL=deepseek-chat
-ANALYZE_FORMAT=openai
+## 数据和隐私
 
-# 視覺通讀（auto / on / off）
-ANALYZE_VISION_MODE=auto
-# ANALYZE_VISION_MODEL=your-vision-model
+Co-Reading 是本地优先工具，但**不是完全离线工具**。
 
-PORT=3456
-```
+保存在本机：
 
-`AI_*` 用於論文討論，`ANALYZE_*` 用於首次通讀。兩組配置可以使用不同模型、API Key 和 API 格式；未填的通讀字段會繼承主模型配置。
+- 上传的 PDF。
+- 提取后的正文。
+- 聊天记录、摘要、洞察、笔记和阅读进度。
+- API 设置和 API Key。
 
-`openai` 在這裡指 OpenAI Chat Completions-compatible 的 `/chat/completions` 格式，不是 Responses API。
+会发送给你配置的 AI 服务商：
 
-### OpenCode Go
+- 用于摘要和讨论的论文正文。
+- 视觉通读时选中的 PDF 页面或原始 PDF。
+- 你的问题和相关洞察上下文。
 
-推薦用視覺模型讀圖，再由主模型綜合正文與視覺證據：
+API Key 保存在本机 SQLite 设置表中，目前没有额外加密。不要分享 `data/co-reading.db`，也不要把默认服务直接暴露到公网。
 
-```env
-AI_BASE_URL=https://opencode.ai/zen/go/v1
-AI_API_KEY=opencode_xxx
-AI_FORMAT=openai
-AI_MODEL=deepseek-v4-pro
+建议定期备份整个 `data/` 目录；它包含数据库和上传的 PDF。`data/` 已被 Git 忽略，不会正常进入代码仓库。
 
-ANALYZE_BASE_URL=https://opencode.ai/zen/go/v1
-ANALYZE_API_KEY=opencode_xxx
-ANALYZE_FORMAT=openai
-ANALYZE_MODEL=deepseek-v4-pro
-ANALYZE_VISION_MODE=on
-ANALYZE_VISION_MODEL=deepseek-v4-flash-vision-exp
-```
+## PDF 和图表是怎么处理的
 
-HTTP 請求中的模型名稱直接填 `deepseek-v4-pro` 等原始 model ID，不要加 `opencode-go/` 前綴。模型可用性與配額以 OpenCode Go 帳戶顯示為準。
+### Anthropic 格式
 
-### 圖表與 PDF 視覺通讀
+如果上游支持原生 PDF document block，Co-Reading 会把原始 PDF 交给模型，让正文、图表和版面一起参与分析。
 
-設定頁提供「圖表／識圖」模式與獨立識圖模型：
+### OpenAI-compatible 格式
 
-- Anthropic format：把原始 PDF 作為 `document` block 送入 Messages API，正文、圖、表與版面一起分析。
-- OpenAI-compatible format：先按頁提取文字，優先選取帶 `Figure`／`Table` caption 的頁面（找不到時均勻抽樣），最多選 8 頁；再用 `pdftoppm` 轉成 PNG，交給識圖模型產生帶頁碼的證據筆記，最後由通讀模型綜合正文與視覺筆記。
-- 文字與圖片不是按像素切割。頁碼與 caption 是兩條處理管線的對齊邊界，最終模型負責交叉驗證。
-- 圖像渲染不可用或上游拒絕圖片時會記錄 warning 並降級成純文字通讀，不會令整篇論文卡死；若最終通讀 API 本身失敗，論文會標記為分析失敗並保留錯誤信息。
+Co-Reading 会：
 
-OpenAI-compatible 的 PDF 頁面渲染需要系統可執行 `pdftoppm`（Poppler）：
+1. 按页提取文字。
+2. 优先选择带有 `Figure` / `Table` caption 的页面；找不到时均匀抽样。
+3. 最多选择 8 页并渲染成 PNG。
+4. 由视觉模型生成带页码的证据笔记。
+5. 再由通读模型综合正文和视觉笔记。
+
+页面渲染需要 Poppler 的 `pdftoppm`：
 
 ```bash
 # macOS
@@ -110,137 +155,110 @@ brew install poppler
 
 # Debian / Ubuntu
 sudo apt-get install poppler-utils
-
-pdftoppm -v
 ```
 
-若執行檔不在 `PATH`，可設定 `PDFTOPPM_PATH=/absolute/path/to/pdftoppm`。桌面版未內建 Poppler；沒有 Poppler 時仍可使用純文字通讀。Anthropic 原生 PDF 模式不依賴 Poppler。
+如果命令不在 `PATH`，可以设置：
 
-### 已知限制
-
-- 掃描版 PDF 若沒有文字層，目前不會自動 OCR；視覺模式只能覆蓋被選取的頁面。
-- OpenAI-compatible 視覺通讀最多處理 8 個頁面，可能漏掉沒有 caption、跨頁或附錄中的圖表。
-- 視覺模型的結果屬模型推斷，重要數值、坐標和統計結論仍應回看原始 PDF。
-- 超過原生 PDF 請求大小限制時，Anthropic 模式會改走頁面渲染路徑；若 Poppler 也不可用，則降級為純文字。
-
-## 功能
-
-### 論文管理
-- **PDF 上傳**：拖拽上傳，自動提取全文（pdf-parse）。掃描版 PDF 會標記為無法提取
-- **AI 通讀**：上傳後自動非同步生成結構化摘要（背景、方法、結果、結論、局限），可把 PDF 圖表納入證據
-- **知識樹**：巢狀分類目錄，論文可歸入任意節點
-- **標籤**：全局標籤系統，跨論文共享
-
-### 論文討論
-- **全文上下文**：每輪討論 AI 都帶著論文全文回答
-- **Streaming**：SSE 流式回覆，即時顯示
-- **Prompt Cache**：Anthropic 格式下論文全文掛 `cache_control: ephemeral`，第二輪起大幅節省 token
-- **洞察注入**：討論時自動注入本篇近期洞察 + 跨論文相關洞察（FTS5 檢索匹配）
-
-### 洞察系統
-- **6 維度分類**：概念、延伸、你的研究、闪回、共振、悬题
-- **AI 提取**：討論後點「提取洞察」，AI 自動從對話中提取 fact / hypothesis / progress（progress 不入洞察，只記錄）
-- **跨論文搜索**：FTS5 trigram tokenizer 支援中英混排全文檢索
-- **相關洞察**：查看與當前論文相關的所有洞察
-
-### 其他
-- **筆記**：Markdown 編輯器，每篇論文獨立筆記
-- **原文閱讀**：FullTextView 逐段閱讀 + 標註
-- **逐節進度**：論文章節級閱讀進度追蹤
-- **設定頁**：Web UI 修改 API 配置，即時測試連通性
-
-## 專案結構
-
+```ini
+PDFTOPPM_PATH=/absolute/path/to/pdftoppm
 ```
+
+桌面安装包目前不内置 Poppler。没有 Poppler 时仍可使用纯文字通读；Anthropic 原生 PDF 路径不依赖 Poppler。
+
+## 重要限制
+
+- 扫描版 PDF 没有文字层时，目前不会自动 OCR。
+- OpenAI-compatible 视觉通读最多选取 8 页，可能漏掉没有 caption、跨页或位于附录中的图表。
+- 视觉模型可能误读坐标、单位、显著性或小字号文字；重要数字必须回看原始 PDF。
+- 图像渲染不可用或上游不接受图片时，会降级为纯文字通读。
+- 不同“兼容 OpenAI”的服务对图片、模型名和 streaming 的支持并不完全相同。
+- 当前应用面向单机个人使用，没有多用户权限系统，也不应直接作为公共服务部署。
+
+## 模型配置
+
+最简单的方式是在应用设置页完成配置：
+
+- `AI_*`：用于论文讨论。
+- `ANALYZE_*`：用于首次通读；留空时继承 `AI_*`。
+- 通读模型和讨论模型可以来自不同服务商。
+- `openai` 表示 Chat Completions-compatible `/chat/completions`，不是 Responses API。
+
+<details>
+<summary>查看 .env 配置示例</summary>
+
+```ini
+AI_BASE_URL=https://api.anthropic.com/v1
+AI_API_KEY=replace-with-your-key
+AI_MODEL=replace-with-your-model
+AI_FORMAT=anthropic
+
+# 可选：单独配置通读模型
+ANALYZE_BASE_URL=https://api.example.com/v1
+ANALYZE_API_KEY=replace-with-your-key
+ANALYZE_MODEL=replace-with-your-model
+ANALYZE_FORMAT=openai
+
+# auto / on / off
+ANALYZE_VISION_MODE=auto
+ANALYZE_VISION_MODEL=replace-with-your-vision-model
+
+PORT=3456
+```
+
+`AI_BASE_URL` 和 `ANALYZE_BASE_URL` 只填写到 `/v1` 或服务商要求的 API 根路径，不要手动追加 `/chat/completions`。
+
+</details>
+
+## 与 Research Gateway 配合（可选）
+
+Co-Reading 可以把 Research Gateway 当作一个 OpenAI Chat Completions-compatible 上游。它不会在 Co-Reading 内再实现一套账号、代理或配额系统。
+
+```ini
+AI_BASE_URL=https://your-domain.example/research/v1
+AI_API_KEY=replace-with-your-gateway-key
+AI_MODEL=replace-with-a-gateway-allowed-model
+AI_FORMAT=openai
+```
+
+`AI_BASE_URL` 填到 `/v1`，Co-Reading 会自行请求 `/chat/completions`。
+
+Research Gateway 目前不是 Co-Reading 的必要组件。只想在本机读论文时，直接配置任意支持的 AI 服务即可。
+
+## 给开发者
+
+<details>
+<summary>技术栈和目录</summary>
+
+| 层 | 技术 |
+|---|---|
+| 桌面 | Electron 35 |
+| 前端 | React 19、Vite 6、zustand 5 |
+| 后端 | Express 5 |
+| 数据库 | better-sqlite3、WAL、FTS5 trigram |
+| PDF | pdf-parse、可选 Poppler |
+| AI | Anthropic Messages / OpenAI Chat Completions-compatible |
+
+```text
 co-reading/
-├── package.json
-├── vite.config.js
-├── .env.example
-├── .env
-├── src/                          # 後端 (Express 5)
-│   ├── server.js                 # 主入口
-│   ├── db.js                     # SQLite (WAL, FK, FTS5)
-│   ├── ai.js                     # AI API 調用 (Anthropic/OpenAI, streaming, cache)
-│   ├── memory.js                 # 記憶提取 (AI → insights 表)
-│   ├── search.js                 # FTS5 公用搜索
-│   ├── pdf.js                    # PDF 文本提取、圖表頁選取與 PNG 渲染
-│   ├── logger.js                 # 日誌
-│   └── routes/
-│       ├── papers.js             # 論文 CRUD + 上傳 + 通讀 + 提取洞察
-│       ├── chat.js               # 論文討論 (SSE)
-│       ├── insights.js           # 洞察 CRUD + 關聯查詢
-│       ├── tags.js               # 標籤 CRUD
-│       └── tree.js               # 知識樹 CRUD
-├── frontend/                     # 前端 (React 19 + Vite)
-│   ├── index.html                # Tailwind CDN + 調色盤 + 全局樣式
-│   └── src/
-│       ├── main.jsx
-│       ├── App.jsx
-│       ├── store.js              # zustand 全局狀態
-│       ├── api.js                # fetch 封裝 + SSE streaming
-│       ├── pages/
-│       │   ├── Library.jsx       # 主頁：文獻列表
-│       │   ├── PaperDetail.jsx   # 論文詳情：摘要 + 討論 + 筆記
-│       │   └── Settings.jsx      # API 配置
-│       └── components/
-│           ├── Sidebar.jsx       # 左側知識樹 + 洞察面板
-│           ├── ChatPanel.jsx     # AI 討論面板 + 提取洞察
-│           ├── SummaryView.jsx   # 結構化摘要展示
-│           ├── InsightsPanel.jsx # 全局洞察瀏覽
-│           ├── InsightCard.jsx   # 單條洞察卡片
-│           ├── InsightForm.jsx   # 手動創建/編輯洞察
-│           ├── FullTextView.jsx  # 原文閱讀器 + 標註
-│           ├── PaperCard.jsx     # 論文卡片
-│           ├── TagBadge.jsx      # 標籤徽章
-│           ├── TreeNode.jsx      # 知識樹節點
-│           └── UploadZone.jsx    # PDF 拖拽上傳
-├── data/                         # SQLite + PDF 存儲 (gitignore)
-│   ├── co-reading.db
-│   └── pdfs/
-└── dist/                         # 前端 build 產物
+├── electron.js
+├── src/                   后端、数据库、AI 和 PDF 处理
+│   └── routes/            论文、聊天、洞察、标签、知识树 API
+├── frontend/              React 前端
+├── test/                  后端测试
+├── build/                 桌面图标
+├── data/                  SQLite 和 PDF；不进入 Git
+└── dist/                  前端构建产物
 ```
 
-## 數據庫
+</details>
 
-SQLite (`data/co-reading.db`)，7 張核心表 + 1 個 FTS5 虛擬表：
+GitHub Actions 会在发布前运行测试，并为 macOS 和 Windows 构建安装包。推送 `v*` tag 后会建立 GitHub Release。
 
-| 表 | 說明 |
-|----|------|
-| `papers` | 論文（全文、摘要、狀態、筆記） |
-| `messages` | 討論歷史 |
-| `tags` + `paper_tags` | 標籤系統 |
-| `tree_nodes` | 知識樹 |
-| `insights` + `insights_fts` | 洞察 + trigram 全文索引 |
-| `annotations` | 原文標註 |
-| `section_progress` | 逐節閱讀進度 |
-| `settings` | API 配置 (key-value) |
+## 当前状态
 
-## 技術棧
+当前稳定版本：**v1.1.1**。
 
-| 層 | 選擇 |
-|----|------|
-| 前端 | React 19 + Vite 6 |
-| 狀態 | zustand 5 |
-| CSS | Tailwind CSS (CDN) |
-| Markdown | react-markdown + remark-gfm |
-| 後端 | Express 5 |
-| 數據庫 | better-sqlite3 (WAL, FTS5 trigram) |
-| PDF | pdf-parse |
-| AI | Anthropic / OpenAI-compatible (雙格式) |
-| ID | nanoid |
-
-## 發布
-
-GitHub Actions 會先執行完整測試，再分別建立 macOS 與 Windows 安裝包。推送 `v*` tag 後，工作流會建立 GitHub Release 並附上 `.dmg`、`.exe` 與自動生成的 release notes。
-
-```bash
-npm test
-npm run build
-git tag v1.1.1
-git push origin v1.1.1
-```
-
-建立 tag 前應先把發布提交合併到 `main`，並確認 `package.json` 的版本與 tag 一致。提交、推送與建立 Release 不會由應用程式自動執行。
+`main` 已包含本 README 描述的 PDF 管理、结构化通读、图表分析、全文讨论、洞察、知识树和桌面打包。实验性 Research Carryover/refinement 功能仍在独立分支中，不属于 v1.1.1 的稳定承诺。
 
 ## License
 
