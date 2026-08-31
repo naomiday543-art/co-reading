@@ -56,6 +56,34 @@ describe('multimodal provider serialization', () => {
     assert.equal(isVisionEnabled({ visionMode: 'auto', model: 'deepseek-v4-flash', baseUrl: '' }), false);
     assert.equal(isVisionEnabled({ visionMode: 'auto', model: 'deepseek-v4-flash-vision-exp', baseUrl: '' }), true);
     assert.equal(isVisionEnabled({ visionMode: 'on', model: 'text-only', baseUrl: '' }), true);
+
+    // §4.1：明確宣告壓過名字猜測。這一組是真實觸發路徑——
+    // Antigravity 的 gemini-3.7-flash-low 只吃文字，卻會命中 /gemini/。
+    assert.equal(
+      isVisionEnabled({ visionMode: 'auto', model: 'gemini-3.7-flash-low', baseUrl: '' }),
+      true,
+      '名字猜測的舊行為：命中 /gemini/ 就當作看得懂圖（這正是要防的）',
+    );
+    assert.equal(
+      isVisionEnabled({ visionMode: 'auto', model: 'gemini-3.7-flash-low', baseUrl: '', visionCapable: false }),
+      false,
+      'visionCapable=false 必須否決名字猜測，否則圖片會被送去 text-only provider 靜默丟失',
+    );
+    assert.equal(
+      isVisionEnabled({ visionMode: 'auto', model: 'deepseek-v4-flash', baseUrl: '', visionCapable: true }),
+      true,
+      'visionCapable=true 也要能推翻猜測（名字看不出來但實際支援的 provider）',
+    );
+    assert.equal(
+      isVisionEnabled({ visionMode: 'off', model: 'gpt-4o', baseUrl: '', visionCapable: true }),
+      false,
+      'visionMode 的手動 off 仍是最高優先，不被 capability 宣告推翻',
+    );
+    assert.equal(
+      isVisionEnabled({ visionMode: 'auto', model: 'gpt-4o', baseUrl: '' }),
+      true,
+      '未宣告時行為完全照舊（零破壞）',
+    );
   });
 });
 
