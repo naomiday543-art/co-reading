@@ -209,20 +209,6 @@ PORT=3456
 
 </details>
 
-## 与 Research Gateway 配合（可选）
-
-Co-Reading 可以把 Research Gateway 当作一个 OpenAI Chat Completions-compatible 上游。它不会在 Co-Reading 内再实现一套账号、代理或配额系统。
-
-```ini
-AI_BASE_URL=https://your-domain.example/research/v1
-AI_API_KEY=replace-with-your-gateway-key
-AI_MODEL=replace-with-a-gateway-allowed-model
-AI_FORMAT=openai
-```
-
-`AI_BASE_URL` 填到 `/v1`，Co-Reading 会自行请求 `/chat/completions`。
-
-Research Gateway 目前不是 Co-Reading 的必要组件。只想在本机读论文时，直接配置任意支持的 AI 服务即可。
 
 ## 给开发者
 
