@@ -9,6 +9,7 @@ import chatRouter from './routes/chat.js';
 import tagsRouter from './routes/tags.js';
 import treeRouter from './routes/tree.js';
 import insightsRouter from './routes/insights.js';
+import activityRouter from './routes/activity.js';
 import { getSetting, setSetting, getSettings } from './db.js';
 import { dataPaths } from './paths.js';
 
@@ -27,6 +28,7 @@ app.use('/api/papers', chatRouter);
 app.use('/api', tagsRouter);
 app.use('/api', treeRouter);
 app.use('/api', insightsRouter);
+app.use('/api', activityRouter);
 
 // Settings endpoints
 app.get('/api/settings', (_req, res) => {
