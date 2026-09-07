@@ -296,6 +296,21 @@ data: {"type":"error","message":"..."}\n\n
 | PATCH | `/api/insights/:id` | 部分更新（含 dimension 校驗） |
 | DELETE | `/api/insights/:id` | |
 
+### 7.3a 閱讀活動（唯讀，供 Library 歡迎面板）
+
+| Method | Path | 說明 |
+|--------|------|------|
+| GET | `/api/activity` | `?days=365`（`1..730`；`0` = 不限；缺省 365，超界／非整數回 400） |
+
+[`src/routes/activity.js`](src/routes/activity.js)。回 `{from, to, days[], totals, streak, peak_hour, dimensions}`：
+
+- 分桶走 SQLite `date(created_at/1000,'unixepoch','localtime')` —— 三表 `created_at` 都是 ms epoch。
+  co-reading 是本機應用，伺服器時區即使用者時區；**日後若部署到遠端，要改成前端分桶或傳 tz offset**。
+- 熱力圖色階基準 = 當天 `role='user'` 的訊息數（不算 assistant、不算 token）；洞察只當「當天有／無」的角標，不參與色階。
+- `streak.current` 從今天往回數，今天無活動時給一天寬限從昨天起算（GitHub 語義）；`streak.longest` 為範圍內最長連續 active 天數。active = 當天有 user 訊息。
+- **只回計數**：回應 JSON 不含任何 `messages.content` / `insights.content` / `insights.title`（見 §11.5 與 §13 的紅線；`test/activity.test.js` 以 `SECRET_MARKER` 斷言）。
+- 純唯讀，無寫入路徑、無 migration、無新索引。
+
 ### 7.4 標籤 / 樹 / 設定 / 日誌
 
 | Method | Path | 說明 |
