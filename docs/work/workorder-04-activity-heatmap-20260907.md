@@ -4,7 +4,7 @@
 >
 > 優先級：P2 功能，小型（一個只讀端點 + 一個前端面板）
 >
-> Repo：`/Users/laine/research-stack/co-reading`
+> Repo：`~/research-stack/co-reading`
 >
 > Base branch：`main` @ `c1ce559`（不是 `feat/carryover-client`；理由見 §8）
 >
