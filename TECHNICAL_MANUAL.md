@@ -424,6 +424,20 @@ ANALYZE_FORMAT=openai
 PORT=3456
 ```
 
+若把模型請求交給 research-gateway 的 normalized OpenAI-compatible 介面，仍使用上述既有 `AI_*` / `ANALYZE_*` 客戶端配置：
+
+```env
+# 本機 Gateway
+AI_BASE_URL=http://127.0.0.1:8788/v1
+# 部署後（nginx /research/ strip prefix）
+# AI_BASE_URL=https://your-domain.example/research/v1
+AI_API_KEY=<PROXY_API_KEY>
+AI_MODEL=<gateway-allow-listed-model>
+AI_FORMAT=openai
+```
+
+`src/ai.js:148-155` 會把 OpenAI-compatible base URL 組成 `${AI_BASE_URL}/chat/completions`，所以 base URL 不要重複包含該 suffix。Bearer 認證直接沿用 Gateway 現有 key；Coreading 不建立另一套 auth、proxy 或 quota stack。`ANALYZE_*` 要走同一 Gateway 時同樣設定為 `openai` 與該 base URL。
+
 ### 10.2 設定優先級
 DB `settings` 表 > 環境變量。Settings 頁面修改會即時生效，無需重啟。
 

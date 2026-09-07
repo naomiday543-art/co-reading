@@ -210,6 +210,22 @@ PORT=3456
 </details>
 
 
+### 通过 Research Gateway 接入（可选）
+
+如果你使用 research-gateway 提供的 OpenAI-compatible 接口，沿用现有的 OpenAI 配置即可：
+
+```ini
+# 本机： http://127.0.0.1:8788/v1
+# 部署后： https://your-domain.example/research/v1
+AI_BASE_URL=https://your-domain.example/research/v1
+AI_API_KEY=replace-with-gateway-key
+AI_MODEL=replace-with-gateway-allowed-model
+AI_FORMAT=openai
+```
+
+`AI_BASE_URL` 只填到 `/v1`；Co-Reading 会请求 `${AI_BASE_URL}/chat/completions`。认证沿用 Gateway 现有的 Bearer key，Co-Reading 不另建 auth、proxy 或 quota 层。通读模型要走同一接口时，给 `ANALYZE_*` 填相同的 base URL、key 和 `openai` format。
+
+
 ## 给开发者
 
 <details>

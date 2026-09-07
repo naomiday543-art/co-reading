@@ -4,6 +4,7 @@ import { log } from './logger.js';
 import { searchInsights } from './search.js';
 import { readFileSync, statSync } from 'fs';
 import { renderVisualPages } from './pdf.js';
+import { renderCarryoverForInjection } from './carryover.js';
 
 function resolveConfig(prefix) {
   const dbSettings = getSettings();
@@ -13,6 +14,12 @@ function resolveConfig(prefix) {
   const format = dbSettings[`${prefix}_format`] || process.env[`${prefix.toUpperCase()}_FORMAT`];
   const visionMode = dbSettings[`${prefix}_vision_mode`] || process.env[`${prefix.toUpperCase()}_VISION_MODE`];
   const visionModel = dbSettings[`${prefix}_vision_model`] || process.env[`${prefix.toUpperCase()}_VISION_MODEL`];
+  // 明確的能力宣告（三態）：'true' | 'false' | 未設。未設時才退回名字猜測。
+  const visionCapableRaw = dbSettings[`${prefix}_vision_capable`]
+    ?? process.env[`${prefix.toUpperCase()}_VISION_CAPABLE`];
+  const visionCapable = visionCapableRaw === undefined || visionCapableRaw === null || `${visionCapableRaw}`.trim() === ''
+    ? undefined
+    : !['0', 'false', 'off', 'no'].includes(`${visionCapableRaw}`.trim().toLowerCase());
 
   return {
     key,
@@ -21,6 +28,7 @@ function resolveConfig(prefix) {
     format,
     visionMode,
     visionModel,
+    visionCapable,
   };
 }
 
@@ -32,6 +40,7 @@ export function getChatConfig() {
     model: config.model || 'gpt-4o',
     format: config.format || 'openai',
     visionMode: config.visionMode || 'auto',
+    visionCapable: config.visionCapable,
   };
 }
 
@@ -46,6 +55,7 @@ export function getAnalyzeConfig() {
     format: config.format || mainConfig.format || 'openai',
     visionMode: config.visionMode || mainConfig.visionMode || 'auto',
     visionModel: config.visionModel || config.model || mainConfig.model || 'gpt-4o',
+    visionCapable: config.visionCapable ?? mainConfig.visionCapable,
   };
 }
 
@@ -110,6 +120,12 @@ export function serializeContent(content, format) {
 export function isVisionEnabled(config) {
   if (config.visionMode === 'on') return true;
   if (config.visionMode === 'off') return false;
+  // 明確宣告永遠壓過名字猜測。名字猜測會把 text-only 的 provider 誤判成看得懂圖：
+  // Antigravity 的 `gemini-3.7-flash-low` 命中下面的 /gemini/ 卻只吃文字
+  // （headless stream input 只接受 text content block），送圖過去就是靜默丟失。
+  // 設 `<PREFIX>_VISION_CAPABLE=false` 即可否決，無論名字長什麼樣。
+  if (config.visionCapable === false) return false;
+  if (config.visionCapable === true) return true;
   const target = `${config.model || ''} ${config.baseUrl || ''}`.toLowerCase();
   return /claude|vision|gpt-4o|gpt-4\.1|gpt-5|gemini/.test(target);
 }
@@ -428,6 +444,16 @@ ${fullText}
     }
   } catch (err) {
     console.error('[INSIGHT-INJECT] failed:', err.message);
+  }
+
+  // 研究續窗（carryover）：手動「帶上」才注入（拍板 #1）。
+  // 只接在變動區（insightText 之後）——絕不能插進 stableSystem，否則每輪打掉 prompt cache。
+  // 注入的是結構化摘要（每條一行、必帶 origin 標記、衝突醒目），不是 transcript（紅線 8）。
+  try {
+    const carryoverText = renderCarryoverForInjection(paper.id);
+    if (carryoverText) insightText += carryoverText;
+  } catch (err) {
+    console.error('[CARRYOVER-INJECT] failed:', err.message);
   }
 
   // Build system: array with cache_control for anthropic, plain string for openai

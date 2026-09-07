@@ -8,6 +8,7 @@ import { extractPDF } from '../pdf.js';
 import { analyzePaper } from '../ai.js';
 import { log } from '../logger.js';
 import { extractInsights } from '../memory.js';
+import { requestRefine, fetchCarryover, fetchClaimProvenance, getCachedCarryover, sessionKeyFor, isCarryoverInjected, setCarryoverInjected } from '../carryover.js';
 import { dataPaths } from '../paths.js';
 
 const router = Router();
@@ -269,6 +270,67 @@ router.post('/:id/extract-insights', async (req, res) => {
     log('ERROR', `記憶提取失敗: ${req.params.id} — ${err.message}`);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ── Research carryover（工單 §5.3，契約 §九）─────────────────────
+
+// POST /api/papers/:id/refine —— 手動觸發精煉（拍板 #3：不定時自動）
+router.post('/:id/refine', async (req, res) => {
+  const paper = db.prepare('SELECT id FROM papers WHERE id = ?').get(req.params.id);
+  if (!paper) return res.status(404).json({ error: '論文不存在' });
+  const msgCount = db.prepare('SELECT COUNT(*) AS n FROM messages WHERE paper_id = ?').get(paper.id).n;
+  if (msgCount < 2) return res.status(400).json({ error: '對話不足 2 條，無法精煉' });
+
+  const sinceSeq = req.body?.since_seq !== undefined ? req.body.since_seq : undefined;
+  const result = await requestRefine(paper.id, { sinceSeq });
+  if (!result.ok) return res.status(502).json({ error: `精煉失敗：${result.reason}` });
+  res.json({
+    ok: true,
+    run_id: result.run_id,
+    version: result.version,
+    idempotent: result.idempotent,
+    stats: result.stats,
+    carryover: result.carryover,
+  });
+});
+
+// GET /api/papers/:id/carryover —— 讀最新 carryover（快取優先，可 ?refresh=1 回源）
+router.get('/:id/carryover', async (req, res) => {
+  const paper = db.prepare('SELECT id FROM papers WHERE id = ?').get(req.params.id);
+  if (!paper) return res.status(404).json({ error: '論文不存在' });
+  const sessionKey = sessionKeyFor(paper.id);
+
+  if (req.query.refresh === '1') {
+    await fetchCarryover(sessionKey);
+  }
+  const cached = getCachedCarryover(sessionKey);
+  if (!cached) return res.status(404).json({ error: '尚無 carryover（先按「精煉本次共讀」）' });
+  res.json({
+    ok: true,
+    session_key: sessionKey,
+    version: cached.version,
+    fetched_at: cached.fetchedAt,
+    injected: isCarryoverInjected(paper.id),
+    carryover: cached.payload,
+  });
+});
+
+// POST /api/papers/:id/carryover/inject —— 「帶上」開關（拍板 #1：手動注入）
+router.post('/:id/carryover/inject', (req, res) => {
+  const paper = db.prepare('SELECT id FROM papers WHERE id = ?').get(req.params.id);
+  if (!paper) return res.status(404).json({ error: '論文不存在' });
+  const enabled = Boolean(req.body?.enabled);
+  setCarryoverInjected(paper.id, enabled);
+  res.json({ ok: true, paper_id: paper.id, injected: enabled });
+});
+
+// GET /api/papers/:id/claims/:claimId/provenance —— 溯源代理（前端不直連 gateway）
+router.get('/:id/claims/:claimId/provenance', async (req, res) => {
+  const paper = db.prepare('SELECT id FROM papers WHERE id = ?').get(req.params.id);
+  if (!paper) return res.status(404).json({ error: '論文不存在' });
+  const result = await fetchClaimProvenance(req.params.claimId);
+  if (!result.ok) return res.status(502).json({ error: `溯源失敗：${result.reason}` });
+  res.json(result.provenance);
 });
 
 export default router;

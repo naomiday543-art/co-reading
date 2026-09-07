@@ -1,4 +1,7 @@
-node_modules/
+# 不要加斜線：`node_modules/` 只匹配目錄，擋不住同名的 symlink。
+# 2026-08-30 踩過：worktree 裡 ln -s 出來的 node_modules 被 git add -A 收進 commit，
+# 成了一個指向某台 Mac 絕對路徑的死連結。
+node_modules
 dist/
 data/
 books/

@@ -219,6 +219,18 @@ db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_msg_paper_seq_unique ON messages(paper_id, seq);
 `);
 
+// ── carryover 快取（工單 §5.3：只讀鏡像，不是第二個記憶系統；gateway 是唯一事實源）──
+// 可隨時清空、不參與 consolidation。last_seq 記錄上次精煉涵蓋到的訊息序號（增量用）。
+db.exec(`
+  CREATE TABLE IF NOT EXISTS carryover_cache (
+    session_key TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    version     INTEGER NOT NULL,
+    last_seq    INTEGER,
+    fetched_at  INTEGER NOT NULL
+  );
+`);
+
 export function getSetting(key) {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
   return row ? row.value : null;
