@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useStore } from '../store';
 import { papersApi } from '../api';
 import PaperCard from '../components/PaperCard';
+import ActivityPanel from '../components/ActivityPanel';
 
 export default function Library({ onNavigate, onRefresh }) {
   const {
@@ -87,6 +88,9 @@ export default function Library({ onNavigate, onRefresh }) {
           </div>
         </div>
       </div>
+
+      {/* Activity panel — 只在未篩選狀態顯示（篩選時是工作模式，不是歡迎頁） */}
+      {!selectedTag && !selectedTreeNode && !searchQuery && <ActivityPanel />}
 
       {/* Paper list */}
       {papers.length === 0 ? (

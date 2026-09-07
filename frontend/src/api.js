@@ -126,3 +126,8 @@ export function continueChat(paperId, { onDelta, onDone, onError }) {
     body: JSON.stringify({}),
   }).then(response => readSSEStream(response, { onDelta, onDone, onError }));
 }
+
+// 閱讀活動面板（工單 04）。days：1..730，0 = 不限（All）。只回計數，不回內容。
+export const activityApi = {
+  get: (days = 365) => request(`/activity?days=${days}`),
+};
