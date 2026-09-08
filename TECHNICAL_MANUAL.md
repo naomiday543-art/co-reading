@@ -78,7 +78,9 @@ co-reading/
 ├── src/                            # 後端
 │   ├── server.js                   # Express 主入口，路由註冊
 │   ├── db.js                       # SQLite 初始化 + idempotent migration
-│   ├── ai.js                       # AI provider 適配 + 論文對話 prompt
+│   ├── ai.js                       # AI provider 適配 + 論文對話 prompt 組裝
+│   ├── constitution.js             # 導師憲章三級載入（dataDir 覆蓋 → 內建 → 保險絲）
+│   ├── prompts/CONSTITUTION.md     # 內建憲章（「導師是誰」）
 │   ├── memory.js                   # 從對話提取結構化洞察
 │   ├── search.js                   # FTS5 + LIKE fallback 檢索
 │   ├── pdf.js                      # PDF 文本提取
@@ -215,10 +217,21 @@ CREATE VIRTUAL TABLE insights_fts USING fts5(
 - `streamAnthropic / streamOpenAI` — async generator 統一 streaming 介面
 - `analyzePaper(fullText, {pdfPath})` — non-streaming，要求模型輸出嚴格 JSON 結構化摘要；Anthropic 原生讀 PDF，OpenAI-compatible 採「識圖模型證據筆記 → 通讀模型綜合」兩階段
 - `chatAboutPaper(paper, history, userMessage, onChunk)` — 主對話入口
-  - 系統 prompt 分兩段：stable（含全文）+ variable（注入的 insights）
-  - Anthropic format 時對 stable 段加 `cache_control: ephemeral`，第二輪起 prompt cache 生效
+  - 系統 prompt 分三段：憲章（`constitution.js` 載入，見下）+ 論文區塊（`buildPaperBlock`，含全文）+ variable（注入的 insights / 續窗）
+  - Anthropic format 時憲章與論文區塊各自一個 `cache_control: ephemeral` block（`buildChatSystem`），第二輪起 prompt cache 生效；改憲章只冷一次，換論文不打掉憲章緩存
+  - 每輪 log `[CONSTITUTION] source=user|builtin|fallback`，看導師身份是從哪一級載入的
   - `userMessage = null` 表示「不附加 user 消息」，用於 regenerate / continue
 - `testConnection(config)` — Settings 頁面試 API 連通性
+
+### 6.2a `constitution.js` — 導師憲章（工單 05，2026-09-08）
+「導師是誰」不再硬編在 `ai.js`，而是一個 Markdown 文件，仿 research-gateway 的 `skills/CONSTITUTION.md` 模式（兩個 repo **各自一份**，不共用）。
+
+載入順序（`loadConstitution()`，每輪讀一次，無快取）：
+1. `<dataDir>/CONSTITUTION.md` — 使用者自己的版本。Electron 下 dataDir = `userData/data`（macOS：`~/Library/Application Support/co-reading/data/`）。放一份進去就覆蓋內建，**不用重建 app**，改了下一輪生效。
+2. `src/prompts/CONSTITUTION.md` — 隨 app 打包的內建預設。
+3. 硬編一句「你是一位科研導師…」— 保險絲，內建檔讀不到時用，並 log WARN。
+
+空白檔（只有空白字元）視為不存在。憲章只寫「是誰、價值觀、語言、邊界」；論文區塊、洞察、續窗是素材，不改人格。`analyzePaper` 與視覺審讀的 prompt 是任務指令，**不走憲章**。
 
 ### 6.3 `memory.js` — 洞察提取（**整合面重點**）
 - `extractInsights(paperId)`：
@@ -375,8 +388,9 @@ POST /api/papers/:id/chat {message}
   → 取整段歷史（不含剛存的 user，避免 prompt 裡重複）
   → chatAboutPaper(paper, history, message):
       systemForRequest = [
-        {text: stableSystem, cache_control: ephemeral},  // 全文+指令，命中 cache
-        {text: insightText},                              // 注入的洞察，每輪變化
+        {text: constitution, cache_control: ephemeral},  // 憲章（constitution.js），永遠最前
+        {text: paperBlock,   cache_control: ephemeral},  // 論文資訊+全文，命中 cache
+        {text: insightText},                              // 注入的洞察/續窗，每輪變化
       ]
       → SSE 流式回覆
   → 流結束後 INSERT assistant message

@@ -6,6 +6,7 @@ import { readFileSync, statSync } from 'fs';
 import { renderVisualPages } from './pdf.js';
 import { renderCarryoverForInjection } from './carryover.js';
 import { opencodeSessionHeaders } from './opencodeSession.js';
+import { loadConstitution } from './constitution.js';
 
 function resolveConfig(prefix) {
   const dbSettings = getSettings();
@@ -503,17 +504,13 @@ export async function analyzePaper(fullText, { pdfPath } = {}) {
   };
 }
 
-export async function chatAboutPaper(paper, history, userMessage, onChunk) {
-  const config = getChatConfig();
-
+// 論文區塊：標題/作者/年份/AI 摘要/全文。措辭逐字沿用工單 05 之前的 stableSystem，只是拿掉了身份句。
+export function buildPaperBlock(paper) {
   const fullText = paper.full_text.length > 100000
     ? paper.full_text.slice(0, 100000) + '\n[全文已截斷]'
     : paper.full_text;
 
-  // Stable part: paper info + full text + instructions — eligible for prompt cache
-  const stableSystem = `你是一位科研導師，正在幫助用戶閱讀和理解一篇學術論文。
-
-以下是這篇論文的信息：
+  return `以下是這篇論文的信息：
 標題：${paper.title}
 作者：${paper.authors}
 年份：${paper.year || '未知'}
@@ -526,14 +523,26 @@ AI 摘要：
 - 局限：${paper.summary_limitations}
 
 以下是論文全文（供你參考回答問題，不需要重複全文內容）：
-${fullText}
+${fullText}`;
+}
 
-回答要求：
-1. 基於論文內容準確回答，不要編造論文中沒有的信息
-2. 如果論文中沒有相關內容，明確告知用戶
-3. 用清晰、易懂的語言解釋
-4. 適當引用論文中的具體段落或數據
-5. 使用用戶提問時所用的語言回答`;
+// system 的穩定前綴 = 憲章（單獨一個 cache block，永遠最前）+ 論文區塊（第二個 cache block）。
+// 換論文不打掉憲章緩存；改憲章只冷一次。變動區（洞察/續窗）由呼叫端接在後面。
+export function buildChatSystem(paper, { constitution, format }) {
+  const paperBlock = buildPaperBlock(paper);
+  if (format === 'anthropic') {
+    return [
+      { type: 'text', text: constitution, cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: paperBlock, cache_control: { type: 'ephemeral' } },
+    ];
+  }
+  return constitution + '\n\n' + paperBlock;
+}
+
+export async function chatAboutPaper(paper, history, userMessage, onChunk) {
+  const config = getChatConfig();
+  const { text: constitution, source: constitutionSource } = loadConstitution();
+  const stableSystem = buildChatSystem(paper, { constitution, format: config.format });
 
   // Variable part: injected insights — changes per-turn, not cached
   let insightText = '';
@@ -583,18 +592,17 @@ ${fullText}
     console.error('[CARRYOVER-INJECT] failed:', err.message);
   }
 
-  // Build system: array with cache_control for anthropic, plain string for openai
+  // Build system: [憲章 block, 論文 block, (變動區)] for anthropic; plain string for openai
   let systemForRequest;
   if (config.format === 'anthropic') {
-    systemForRequest = [
-      { type: 'text', text: stableSystem, cache_control: { type: 'ephemeral' } },
-    ];
+    systemForRequest = [...stableSystem];
     if (insightText) {
       systemForRequest.push({ type: 'text', text: insightText });
     }
   } else {
     systemForRequest = stableSystem + insightText;
   }
+  log('INFO', `[CONSTITUTION] source=${constitutionSource} format=${config.format}`);
 
   const messages = [
     { role: 'system', content: systemForRequest },
