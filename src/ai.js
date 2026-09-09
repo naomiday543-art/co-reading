@@ -263,6 +263,85 @@ function responseText(config, data) {
   return data.choices?.[0]?.message?.content || '';
 }
 
+/**
+ * 通讀的輸出預算。
+ *
+ * 推理模型（deepseek-v4-pro 這類）的思考鏈與正文**共用同一個 completion 預算**：
+ * 2026-09-09 對真實上游實測同一篇論文（OpenCode Go / deepseek-v4-pro，59,615 字全文）——
+ *   max_tokens=2000 → finish_reason='stop'、completion_tokens=1968（reasoning 1421）
+ *                     ＝只剩 32 tokens 餘裕，思考鏈一長就翻車
+ *   max_tokens=600  → finish_reason='length'、reasoning_tokens=600、content 長度 0
+ * 第二組就是生產事故的形狀：HTTP 200、外層 JSON 合法、正文整個是空字串，
+ * 於是錯誤訊息印成「AI 返回的摘要格式不正確: 」冒號後面什麼都沒有。
+ * 詳見 docs/work/report-analyze-slow-fail-20260909.md §A。
+ */
+export const ANALYZE_MAX_TOKENS = Number(process.env.ANALYZE_MAX_TOKENS) || 8000;
+
+/**
+ * 把兩種 wire format 的「這次生成怎麼收尾的」抽成同一個形狀，給診斷訊息用。
+ */
+export function completionMeta(config, data) {
+  if (config.format === 'anthropic') {
+    const parts = Array.isArray(data?.content) ? data.content : [];
+    return {
+      finishReason: data?.stop_reason || null,
+      truncated: data?.stop_reason === 'max_tokens',
+      reasoning: parts.filter(p => p.type === 'thinking').map(p => p.thinking || '').join(''),
+      toolCalls: parts.filter(p => p.type === 'tool_use'),
+      usage: data?.usage || null,
+    };
+  }
+  const choice = data?.choices?.[0];
+  const message = choice?.message || {};
+  return {
+    finishReason: choice?.finish_reason || null,
+    truncated: choice?.finish_reason === 'length',
+    reasoning: message.reasoning_content || message.reasoning || '',
+    toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : [],
+    usage: data?.usage || null,
+  };
+}
+
+function diagnoseCompletion(meta, content) {
+  const bits = [`finish_reason=${meta.finishReason ?? '未提供'}`, `content=${content.length} 字`];
+  if (meta.reasoning) bits.push(`reasoning_content=${meta.reasoning.length} 字`);
+  if (meta.toolCalls.length) bits.push(`tool_calls=${meta.toolCalls.length}`);
+  if (meta.usage) bits.push(`usage=${JSON.stringify(meta.usage)}`);
+  if (meta.truncated) bits.push('輸出預算用盡（調高 ANALYZE_MAX_TOKENS）');
+  return bits.join('，');
+}
+
+/**
+ * 從一次 completion 裡挖出摘要 JSON。失敗時的錯誤訊息必須帶夠診斷資訊——
+ * 舊版只印 content.slice(0,200)，正文是空字串時錯誤訊息等於一片空白，查不出任何東西。
+ * @param {{format?: string}} config
+ * @param {object} data 上游回的完整 JSON（或串流重組出的等價物）
+ * @returns {object} 解析出的摘要物件
+ */
+export function extractAnalyzeJson(config, data) {
+  const content = responseText(config, data);
+  const meta = completionMeta(config, data);
+  const diag = diagnoseCompletion(meta, content);
+
+  // 答案跑錯欄位的變體：有些 provider 把正文塞進 reasoning_content 而 content 留空。
+  // 只在模型「正常收尾」時才從思考欄搶救——被截斷的思考鏈裡常躺著寫壞一半的草稿 JSON，
+  // 撿回來會悄悄變成半成品摘要，比直接報錯更糟。
+  let source = content;
+  if (!/\{[\s\S]*\}/.test(source) && meta.reasoning && !meta.truncated) {
+    source = meta.reasoning;
+  }
+
+  const jsonMatch = source.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error(`AI 返回的摘要格式不正確（${diag}）: ${content.slice(0, 200)}`);
+  }
+  try {
+    return JSON.parse(jsonMatch[0]);
+  } catch {
+    throw new Error(`AI 返回的摘要無法解析為 JSON（${diag}）: ${source.slice(0, 200)}`);
+  }
+}
+
 async function buildAnalyzeUserContent(config, fullText, pdfPath) {
   const text = fullText.length > 100000 ? `${fullText.slice(0, 100000)}\n[全文已截斷]` : fullText;
   if (!pdfPath || !isVisionEnabled(config)) return text;
@@ -342,7 +421,7 @@ export async function analyzePaper(fullText, { pdfPath } = {}) {
 
   const response = await makeRequest({ ...config, scope: 'analyze' }, {
     messages,
-    max_tokens: 2000,
+    max_tokens: ANALYZE_MAX_TOKENS,
     temperature: 0.2,
     stream: false,
   });
@@ -354,20 +433,8 @@ export async function analyzePaper(fullText, { pdfPath } = {}) {
   } catch {
     throw new Error('AI API 返回的外層 JSON 無法解析: ' + raw.slice(0, 200));
   }
-  const content = responseText(config, json);
 
-  // Try to parse the content as JSON (it might have markdown code blocks)
-  let result;
-  const jsonMatch = content.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    try {
-      result = JSON.parse(jsonMatch[0]);
-    } catch {
-      throw new Error('AI 返回的摘要無法解析為 JSON: ' + content.slice(0, 200));
-    }
-  } else {
-    throw new Error('AI 返回的摘要格式不正確: ' + content.slice(0, 200));
-  }
+  const result = extractAnalyzeJson(config, json);
 
   return {
     title: result.title || '',
