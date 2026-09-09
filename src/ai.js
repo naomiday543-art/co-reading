@@ -5,6 +5,7 @@ import { searchInsights } from './search.js';
 import { readFileSync, statSync } from 'fs';
 import { renderVisualPages } from './pdf.js';
 import { renderCarryoverForInjection } from './carryover.js';
+import { opencodeSessionHeaders } from './opencodeSession.js';
 
 function resolveConfig(prefix) {
   const dbSettings = getSettings();
@@ -59,17 +60,21 @@ export function getAnalyzeConfig() {
   };
 }
 
-function buildHeaders({ key, format }) {
+export function buildHeaders({ key, format, baseUrl, scope }) {
+  // OpenCode Go 要求 x-opencode-session（缺了 400 MissingSessionID）；非 opencode 網域回空物件。
+  const session = opencodeSessionHeaders(baseUrl, scope);
   if (format === 'anthropic') {
     return {
       'Content-Type': 'application/json',
       'x-api-key': key,
       'anthropic-version': '2023-06-01',
+      ...session,
     };
   }
   return {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${key}`,
+    ...session,
   };
 }
 
@@ -282,7 +287,7 @@ async function buildAnalyzeUserContent(config, fullText, pdfPath) {
     const visualPages = await renderVisualPages(pdfPath, { maxPages: 8, dpi: 120 });
     if (visualPages.length > 0) {
       const visionConfig = { ...config, model: config.visionModel || config.model };
-      const response = await makeRequest(visionConfig, {
+      const response = await makeRequest({ ...visionConfig, scope: 'analyze' }, {
         messages: [
           {
             role: 'system',
@@ -335,7 +340,7 @@ export async function analyzePaper(fullText, { pdfPath } = {}) {
     { role: 'user', content: userContent },
   ];
 
-  const response = await makeRequest(config, {
+  const response = await makeRequest({ ...config, scope: 'analyze' }, {
     messages,
     max_tokens: 2000,
     temperature: 0.2,
@@ -477,7 +482,7 @@ ${fullText}
     messages.push({ role: 'user', content: userMessage });
   }
 
-  const response = await makeRequest(config, {
+  const response = await makeRequest({ ...config, scope: `paper:${paper.id}` }, {
     messages,
     max_tokens: 4096,
     temperature: 0.3,
@@ -505,7 +510,7 @@ export async function testConnection({ base_url, api_key, model, format }) {
 
   const messages = [{ role: 'user', content: 'Hi' }];
 
-  const response = await makeRequest(config, {
+  const response = await makeRequest({ ...config, scope: 'test' }, {
     messages,
     max_tokens: 10,
     temperature: 0,
