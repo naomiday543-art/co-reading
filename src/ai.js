@@ -447,7 +447,11 @@ async function buildAnalyzeUserContent(config, fullText, pdfPath) {
       }
     }
   } catch (err) {
-    log('WARN', `PDF 視覺通讀失敗，降級為純文字通讀: ${err.message}`);
+    // 缺 poppler 不是「失敗」，是這台機器沒有這個能力——renderVisualPages 的探測
+    // 已經在整個進程裡抱怨過一次了，不要每篇論文再複述一遍假警報。
+    if (err.code !== 'PDFTOPPM_MISSING') {
+      log('WARN', `PDF 視覺通讀失敗，降級為純文字通讀: ${err.message}`);
+    }
   }
   return text;
 }
