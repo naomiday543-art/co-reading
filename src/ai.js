@@ -175,16 +175,36 @@ export function buildEndpoint({ baseUrl, format }) {
   return `${base}/chat/completions`;
 }
 
+/**
+ * 任何一次上游請求的絕對上限。
+ *
+ * 原本 `makeRequest` 完全沒有 timeout／AbortSignal：上游不回就永遠等下去，
+ * 通讀會卡在 analyze_status='analyzing' 直到有人手動刪論文。
+ * 預設 300s 不是「期待它跑這麼久」，而是「絕不無限」。
+ */
+export const REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS) || 300_000;
+
 async function makeRequest(config, params) {
   const url = buildEndpoint(config);
   const headers = buildHeaders(config);
   const body = buildBody(config, params);
+  const timeoutMs = params.timeoutMs || REQUEST_TIMEOUT_MS;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      // 這顆 signal 同時蓋住「等標頭」與「讀 body」兩段——串流讀到一半上游靜默斷線也會收到 abort。
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+      throw new Error(`AI 請求超時（${Math.round(timeoutMs / 1000)}s 沒有結果）`);
+    }
+    throw err;
+  }
 
   if (!response.ok) {
     let errorText = '';
@@ -195,7 +215,10 @@ async function makeRequest(config, params) {
   return response;
 }
 
-async function* streamAnthropic(response) {
+/**
+ * SSE 行 → 已解析的 JSON 事件。兩種 wire format 共用。
+ */
+async function* sseEvents(response) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -213,12 +236,8 @@ async function* streamAnthropic(response) {
       if (!trimmed || !trimmed.startsWith('data: ')) continue;
       const data = trimmed.slice(6);
       if (data === '[DONE]') return;
-
       try {
-        const json = JSON.parse(data);
-        if (json.type === 'content_block_delta' && json.delta?.text) {
-          yield json.delta.text;
-        }
+        yield JSON.parse(data);
       } catch {
         // skip unparseable lines
       }
@@ -226,33 +245,71 @@ async function* streamAnthropic(response) {
   }
 }
 
-async function* streamOpenAI(response) {
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+/**
+ * 把一條串流收完，重組成「跟非串流回應同一個形狀」的物件，
+ * 好讓 extractAnalyzeJson / responseText / completionMeta 一份邏輯吃兩條路。
+ *
+ * 為什麼通讀要走串流：OpenCode Go 的**非串流**請求 60 秒必斷，而實測同一篇論文
+ * 在 max_tokens=2000（完成 1,968 tokens）時就已經要 38.9 秒——把預算拉到 8000
+ * 之後非串流鐵定撞牆。串流的首字節很早到，之後一路有資料流，躲開那道 60 秒閘。
+ * @returns {object} 非串流形狀的回應物件
+ */
+export async function collectStream(config, response) {
+  let content = '';
+  let reasoning = '';
+  let finishReason = null;
+  let usage = null;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith('data: ')) continue;
-      const data = trimmed.slice(6);
-      if (data === '[DONE]') return;
-
-      try {
-        const json = JSON.parse(data);
-        const delta = json.choices?.[0]?.delta?.content;
-        if (delta) yield delta;
-      } catch {
-        // skip unparseable lines
+  if (config.format === 'anthropic') {
+    for await (const event of sseEvents(response)) {
+      if (event.type === 'content_block_delta') {
+        if (event.delta?.text) content += event.delta.text;
+        if (event.delta?.thinking) reasoning += event.delta.thinking;
       }
+      if (event.type === 'message_delta') {
+        if (event.delta?.stop_reason) finishReason = event.delta.stop_reason;
+        if (event.usage) usage = { ...(usage || {}), ...event.usage };
+      }
+      if (event.type === 'message_start' && event.message?.usage) usage = event.message.usage;
     }
+    return {
+      content: [
+        ...(reasoning ? [{ type: 'thinking', thinking: reasoning }] : []),
+        { type: 'text', text: content },
+      ],
+      stop_reason: finishReason,
+      ...(usage ? { usage } : {}),
+    };
+  }
+
+  for await (const event of sseEvents(response)) {
+    const choice = event.choices?.[0];
+    if (choice?.delta?.content) content += choice.delta.content;
+    if (choice?.delta?.reasoning_content) reasoning += choice.delta.reasoning_content;
+    if (choice?.finish_reason) finishReason = choice.finish_reason;
+    if (event.usage) usage = event.usage;
+  }
+  return {
+    choices: [{
+      finish_reason: finishReason,
+      message: { role: 'assistant', content, ...(reasoning ? { reasoning_content: reasoning } : {}) },
+    }],
+    ...(usage ? { usage } : {}),
+  };
+}
+
+export async function* streamAnthropic(response) {
+  for await (const json of sseEvents(response)) {
+    if (json.type === 'content_block_delta' && json.delta?.text) {
+      yield json.delta.text;
+    }
+  }
+}
+
+export async function* streamOpenAI(response) {
+  for await (const json of sseEvents(response)) {
+    const delta = json.choices?.[0]?.delta?.content;
+    if (delta) yield delta;
   }
 }
 
@@ -261,6 +318,85 @@ function responseText(config, data) {
     return data.content?.filter(part => part.type === 'text').map(part => part.text || '').join('').trim() || '';
   }
   return data.choices?.[0]?.message?.content || '';
+}
+
+/**
+ * 通讀的輸出預算。
+ *
+ * 推理模型（deepseek-v4-pro 這類）的思考鏈與正文**共用同一個 completion 預算**：
+ * 2026-09-09 對真實上游實測同一篇論文（OpenCode Go / deepseek-v4-pro，59,615 字全文）——
+ *   max_tokens=2000 → finish_reason='stop'、completion_tokens=1968（reasoning 1421）
+ *                     ＝只剩 32 tokens 餘裕，思考鏈一長就翻車
+ *   max_tokens=600  → finish_reason='length'、reasoning_tokens=600、content 長度 0
+ * 第二組就是生產事故的形狀：HTTP 200、外層 JSON 合法、正文整個是空字串，
+ * 於是錯誤訊息印成「AI 返回的摘要格式不正確: 」冒號後面什麼都沒有。
+ * 完整重放數據見 commit cea1c15 的訊息（分支 fix/analyze-opencode）。
+ */
+export const ANALYZE_MAX_TOKENS = Number(process.env.ANALYZE_MAX_TOKENS) || 8000;
+
+/**
+ * 把兩種 wire format 的「這次生成怎麼收尾的」抽成同一個形狀，給診斷訊息用。
+ */
+export function completionMeta(config, data) {
+  if (config.format === 'anthropic') {
+    const parts = Array.isArray(data?.content) ? data.content : [];
+    return {
+      finishReason: data?.stop_reason || null,
+      truncated: data?.stop_reason === 'max_tokens',
+      reasoning: parts.filter(p => p.type === 'thinking').map(p => p.thinking || '').join(''),
+      toolCalls: parts.filter(p => p.type === 'tool_use'),
+      usage: data?.usage || null,
+    };
+  }
+  const choice = data?.choices?.[0];
+  const message = choice?.message || {};
+  return {
+    finishReason: choice?.finish_reason || null,
+    truncated: choice?.finish_reason === 'length',
+    reasoning: message.reasoning_content || message.reasoning || '',
+    toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : [],
+    usage: data?.usage || null,
+  };
+}
+
+function diagnoseCompletion(meta, content) {
+  const bits = [`finish_reason=${meta.finishReason ?? '未提供'}`, `content=${content.length} 字`];
+  if (meta.reasoning) bits.push(`reasoning_content=${meta.reasoning.length} 字`);
+  if (meta.toolCalls.length) bits.push(`tool_calls=${meta.toolCalls.length}`);
+  if (meta.usage) bits.push(`usage=${JSON.stringify(meta.usage)}`);
+  if (meta.truncated) bits.push('輸出預算用盡（調高 ANALYZE_MAX_TOKENS）');
+  return bits.join('，');
+}
+
+/**
+ * 從一次 completion 裡挖出摘要 JSON。失敗時的錯誤訊息必須帶夠診斷資訊——
+ * 舊版只印 content.slice(0,200)，正文是空字串時錯誤訊息等於一片空白，查不出任何東西。
+ * @param {{format?: string}} config
+ * @param {object} data 上游回的完整 JSON（或串流重組出的等價物）
+ * @returns {object} 解析出的摘要物件
+ */
+export function extractAnalyzeJson(config, data) {
+  const content = responseText(config, data);
+  const meta = completionMeta(config, data);
+  const diag = diagnoseCompletion(meta, content);
+
+  // 答案跑錯欄位的變體：有些 provider 把正文塞進 reasoning_content 而 content 留空。
+  // 只在模型「正常收尾」時才從思考欄搶救——被截斷的思考鏈裡常躺著寫壞一半的草稿 JSON，
+  // 撿回來會悄悄變成半成品摘要，比直接報錯更糟。
+  let source = content;
+  if (!/\{[\s\S]*\}/.test(source) && meta.reasoning && !meta.truncated) {
+    source = meta.reasoning;
+  }
+
+  const jsonMatch = source.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error(`AI 返回的摘要格式不正確（${diag}）: ${content.slice(0, 200)}`);
+  }
+  try {
+    return JSON.parse(jsonMatch[0]);
+  } catch {
+    throw new Error(`AI 返回的摘要無法解析為 JSON（${diag}）: ${source.slice(0, 200)}`);
+  }
 }
 
 async function buildAnalyzeUserContent(config, fullText, pdfPath) {
@@ -303,15 +439,19 @@ async function buildAnalyzeUserContent(config, fullText, pdfPath) {
         ],
         max_tokens: 3000,
         temperature: 0.1,
-        stream: false,
+        stream: true,
       });
-      const visualNotes = responseText(visionConfig, await response.json());
+      const visualNotes = responseText(visionConfig, await collectStream(visionConfig, response));
       if (visualNotes) {
         return `${text}\n\n[視覺模型對圖表頁的證據筆記]\n${visualNotes}\n\n請把上述視覺筆記與正文交叉驗證；若衝突，以明確可核對的原文與圖表為準。`;
       }
     }
   } catch (err) {
-    log('WARN', `PDF 視覺通讀失敗，降級為純文字通讀: ${err.message}`);
+    // 缺 poppler 不是「失敗」，是這台機器沒有這個能力——renderVisualPages 的探測
+    // 已經在整個進程裡抱怨過一次了，不要每篇論文再複述一遍假警報。
+    if (err.code !== 'PDFTOPPM_MISSING') {
+      log('WARN', `PDF 視覺通讀失敗，降級為純文字通讀: ${err.message}`);
+    }
   }
   return text;
 }
@@ -340,34 +480,16 @@ export async function analyzePaper(fullText, { pdfPath } = {}) {
     { role: 'user', content: userContent },
   ];
 
+  // 串流，不是為了逐字顯示（通讀沒有逐字 UI），是為了躲 OpenCode Go 的 60 秒非串流閘門：
+  // 實測 max_tokens=2000 就要 38.9 秒，預算拉到 8000 之後非串流必撞牆。
   const response = await makeRequest({ ...config, scope: 'analyze' }, {
     messages,
-    max_tokens: 2000,
+    max_tokens: ANALYZE_MAX_TOKENS,
     temperature: 0.2,
-    stream: false,
+    stream: true,
   });
 
-  const raw = await response.text();
-  let json;
-  try {
-    json = JSON.parse(raw);
-  } catch {
-    throw new Error('AI API 返回的外層 JSON 無法解析: ' + raw.slice(0, 200));
-  }
-  const content = responseText(config, json);
-
-  // Try to parse the content as JSON (it might have markdown code blocks)
-  let result;
-  const jsonMatch = content.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    try {
-      result = JSON.parse(jsonMatch[0]);
-    } catch {
-      throw new Error('AI 返回的摘要無法解析為 JSON: ' + content.slice(0, 200));
-    }
-  } else {
-    throw new Error('AI 返回的摘要格式不正確: ' + content.slice(0, 200));
-  }
+  const result = extractAnalyzeJson(config, await collectStream(config, response));
 
   return {
     title: result.title || '',

@@ -4,6 +4,7 @@ import { join } from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import pdfParse from 'pdf-parse';
+import { log } from './logger.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -75,7 +76,49 @@ export async function extractPDF(filepath) {
   return text;
 }
 
+// pdftoppm（poppler）在不在這台機器上。null = 還沒探測過。
+// 這台 Mac 沒裝 poppler，而 opencode_go preset 的 vision_mode 預設是 'on'，
+// 結果每上傳一篇論文都要：把整份 PDF 用 pdf-parse 重新解析一次（實測 371ms）
+// → spawn pdftoppm → ENOENT（1ms）→ 降級。全程約 400ms 純白跑，而且每篇重來。
+// 探測一次就記住，之後連那 371ms 的重新解析都不用付。
+let pdftoppmAvailable = null;
+
+/** 測試用：清掉探測結果。 */
+export function resetPdftoppmProbe() {
+  pdftoppmAvailable = null;
+}
+
+/**
+ * 這台機器有沒有 pdftoppm。整個進程只探測一次，「沒有」也只抱怨一次。
+ * @returns {Promise<boolean>}
+ */
+export async function hasPdftoppm() {
+  if (pdftoppmAvailable !== null) return pdftoppmAvailable;
+  const binary = process.env.PDFTOPPM_PATH || 'pdftoppm';
+  try {
+    await execFileAsync(binary, ['-v'], { timeout: 10_000 });
+    pdftoppmAvailable = true;
+  } catch (err) {
+    // 只有「找不到執行檔」才算沒裝。`pdftoppm -v` 在部分 poppler 版本用非零退出碼
+    // 把版本印在 stderr，那不是缺檔，別把它誤判成沒裝。
+    const missing = err?.code === 'ENOENT' || /ENOENT/.test(err?.message || '');
+    pdftoppmAvailable = !missing;
+    if (missing) {
+      log('WARN', '找不到 pdftoppm（poppler 未安裝），視覺通讀本進程內一律跳過；'
+        + '裝 poppler 或設 PDFTOPPM_PATH 才會啟用');
+    }
+  }
+  return pdftoppmAvailable;
+}
+
 export async function renderVisualPages(filepath, { maxPages = 8, dpi = 120 } = {}) {
+  // 先問有沒有工具，再決定要不要付「整份 PDF 重新解析」的代價。順序反了就是每篇白跑 400ms。
+  if (!(await hasPdftoppm())) {
+    const err = new Error('找不到 pdftoppm（poppler 未安裝），無法把論文頁面轉成圖');
+    err.code = 'PDFTOPPM_MISSING';
+    throw err;
+  }
+
   const { pageTexts } = await inspectPDF(filepath);
   const pageNumbers = selectVisualPageNumbers(pageTexts, maxPages);
   if (pageNumbers.length === 0) return [];

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { log } from './logger.js';
-import papersRouter from './routes/papers.js';
+import papersRouter, { reconcileStuckAnalyses } from './routes/papers.js';
 import chatRouter from './routes/chat.js';
 import tagsRouter from './routes/tags.js';
 import treeRouter from './routes/tree.js';
@@ -88,6 +88,12 @@ export function startServer(port = PORT, host) {
     const address = server.address();
     const listeningPort = typeof address === 'object' && address ? address.port : port;
     log('INFO', `Co-Reading 服務已啟動，端口 ${listeningPort}`);
+    // 啟動對帳：把上次進程死掉時卡在 analyzing 的論文收掉，否則前端永遠轉圈。
+    try {
+      reconcileStuckAnalyses();
+    } catch (e) {
+      log('WARN', `啟動對帳失敗: ${e.message}`);
+    }
     // 啟動補傳（契約 §五）：撈 synced_at IS NULL 的洞察重送。fire-and-forget，不阻塞啟動。
     import('./gateway.js')
       .then(({ flushUnsynced }) => flushUnsynced())
