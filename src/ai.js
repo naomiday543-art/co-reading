@@ -330,7 +330,7 @@ function responseText(config, data) {
  *   max_tokens=600  → finish_reason='length'、reasoning_tokens=600、content 長度 0
  * 第二組就是生產事故的形狀：HTTP 200、外層 JSON 合法、正文整個是空字串，
  * 於是錯誤訊息印成「AI 返回的摘要格式不正確: 」冒號後面什麼都沒有。
- * 詳見 docs/work/report-analyze-slow-fail-20260909.md §A。
+ * 完整重放數據見 commit cea1c15 的訊息（分支 fix/analyze-opencode）。
  */
 export const ANALYZE_MAX_TOKENS = Number(process.env.ANALYZE_MAX_TOKENS) || 8000;
 

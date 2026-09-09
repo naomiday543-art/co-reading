@@ -109,7 +109,7 @@ describe('multimodal provider serialization', () => {
 });
 
 // ── 2026-09-09：OpenCode Go / 推理模型的空正文事故 ────────────────────────────
-// 實測證據見 docs/work/report-analyze-slow-fail-20260909.md §A。
+// 實測證據見 commit cea1c15 的訊息（分支 fix/analyze-opencode）。
 describe('analyze completion parsing (reasoning models)', () => {
   const openai = { format: 'openai' };
 
