@@ -5,7 +5,25 @@ process.env.CO_READING_DB_PATH = `/tmp/co-reading-ai-provider-${process.pid}.sql
 const {
   buildBody, buildEndpoint, isVisionEnabled, serializeContent,
   extractAnalyzeJson, ANALYZE_MAX_TOKENS,
+  collectStream, streamOpenAI, streamAnthropic, REQUEST_TIMEOUT_MS,
 } = await import('../src/ai.js');
+
+/** 把 SSE 文字做成一個能餵給 collectStream / streamXxx 的假 Response。 */
+function sseResponse(lines) {
+  const encoder = new TextEncoder();
+  return {
+    body: {
+      getReader() {
+        let i = 0;
+        return {
+          read: async () => (i < lines.length
+            ? { done: false, value: encoder.encode(lines[i++]) }
+            : { done: true, value: undefined }),
+        };
+      },
+    },
+  };
+}
 const { selectVisualPageNumbers } = await import('../src/pdf.js');
 
 const canonical = [
@@ -175,6 +193,84 @@ describe('analyze completion parsing (reasoning models)', () => {
   test('the analyze budget leaves room for a reasoning chain', () => {
     // 實測 deepseek-v4-pro 在這篇論文上光思考就燒掉 1421 tokens。
     assert.ok(ANALYZE_MAX_TOKENS >= 4000, `通讀預算 ${ANALYZE_MAX_TOKENS} 太小，思考鏈會把正文擠掉`);
+  });
+});
+
+// ── 2026-09-09：通讀改走串流（躲 OpenCode Go 的 60 秒非串流閘門） ─────────────
+describe('stream collection', () => {
+  test('reassembles an OpenAI stream into the non-streaming response shape', async () => {
+    const collected = await collectStream({ format: 'openai' }, sseResponse([
+      'data: {"choices":[{"delta":{"reasoning_content":"先想"}}]}\n',
+      'data: {"choices":[{"delta":{"reasoning_content":"一下"}}]}\n',
+      'data: {"choices":[{"delta":{"content":"{\\"title\\":"}}]}\n',
+      // 故意把一個事件切在兩個 chunk 中間——真實串流一定會這樣切。
+      'data: {"choices":[{"delta":{"content":"\\"T\\"}"}',
+      '}]}\ndata: {"choices":[{"finish_reason":"stop","delta":{}}],"usage":{"completion_tokens":7}}\n',
+      'data: [DONE]\n',
+    ]));
+    assert.equal(collected.choices[0].message.content, '{"title":"T"}');
+    assert.equal(collected.choices[0].message.reasoning_content, '先想一下');
+    assert.equal(collected.choices[0].finish_reason, 'stop');
+    assert.deepEqual(collected.usage, { completion_tokens: 7 });
+    // 重組結果必須能直接餵回同一套解析器（串流／非串流共用一份邏輯）
+    assert.equal(extractAnalyzeJson({ format: 'openai' }, collected).title, 'T');
+  });
+
+  test('a stream truncated by the output budget still reports finish_reason=length', async () => {
+    const collected = await collectStream({ format: 'openai' }, sseResponse([
+      'data: {"choices":[{"delta":{"reasoning_content":"想到一半就沒預算了"}}]}\n',
+      'data: {"choices":[{"finish_reason":"length","delta":{}}]}\n',
+    ]));
+    assert.equal(collected.choices[0].message.content, '');
+    assert.throws(() => extractAnalyzeJson({ format: 'openai' }, collected), /finish_reason=length/);
+  });
+
+  test('reassembles an Anthropic stream, including stop_reason and thinking', async () => {
+    const collected = await collectStream({ format: 'anthropic' }, sseResponse([
+      'data: {"type":"message_start","message":{"usage":{"input_tokens":9}}}\n',
+      'data: {"type":"content_block_delta","delta":{"thinking":"嗯"}}\n',
+      'data: {"type":"content_block_delta","delta":{"text":"{\\"title\\":\\"T\\"}"}}\n',
+      'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}\n',
+    ]));
+    assert.equal(collected.stop_reason, 'end_turn');
+    assert.equal(extractAnalyzeJson({ format: 'anthropic' }, collected).title, 'T');
+    assert.deepEqual(collected.usage, { input_tokens: 9, output_tokens: 4 });
+  });
+
+  test('anthropic max_tokens truncation survives the stream round-trip', async () => {
+    const collected = await collectStream({ format: 'anthropic' }, sseResponse([
+      'data: {"type":"content_block_delta","delta":{"thinking":"想"}}\n',
+      'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}\n',
+    ]));
+    assert.throws(
+      () => extractAnalyzeJson({ format: 'anthropic' }, collected),
+      /finish_reason=max_tokens[\s\S]*輸出預算用盡/,
+    );
+  });
+
+  // 聊天線的兩個 generator 被換到共用的 SSE 解析器上，行為必須一字不差。
+  test('chat generators keep yielding only visible text after the refactor', async () => {
+    const openaiChunks = [];
+    for await (const c of streamOpenAI(sseResponse([
+      'data: {"choices":[{"delta":{"reasoning_content":"思考不該外洩"}}]}\n',
+      'data: {"choices":[{"delta":{"content":"你"}}]}\n',
+      'data: {"choices":[{"delta":{"content":"好"}}]}\ndata: [DONE]\n',
+      'data: {"choices":[{"delta":{"content":"這段在 DONE 之後，不該出現"}}]}\n',
+    ]))) openaiChunks.push(c);
+    assert.deepEqual(openaiChunks, ['你', '好']);
+
+    const anthropicChunks = [];
+    for await (const c of streamAnthropic(sseResponse([
+      'data: {"type":"content_block_delta","delta":{"text":"你"}}\n',
+      'data: not json\n',
+      'data: {"type":"content_block_delta","delta":{"text":"好"}}\n',
+    ]))) anthropicChunks.push(c);
+    assert.deepEqual(anthropicChunks, ['你', '好']);
+  });
+
+  test('there is a finite request timeout', () => {
+    assert.ok(Number.isFinite(REQUEST_TIMEOUT_MS) && REQUEST_TIMEOUT_MS > 0,
+      'makeRequest 以前完全沒有 timeout，上游不回就永遠卡在 analyzing');
   });
 });
 

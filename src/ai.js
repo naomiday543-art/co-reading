@@ -175,16 +175,36 @@ export function buildEndpoint({ baseUrl, format }) {
   return `${base}/chat/completions`;
 }
 
+/**
+ * 任何一次上游請求的絕對上限。
+ *
+ * 原本 `makeRequest` 完全沒有 timeout／AbortSignal：上游不回就永遠等下去，
+ * 通讀會卡在 analyze_status='analyzing' 直到有人手動刪論文。
+ * 預設 300s 不是「期待它跑這麼久」，而是「絕不無限」。
+ */
+export const REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS) || 300_000;
+
 async function makeRequest(config, params) {
   const url = buildEndpoint(config);
   const headers = buildHeaders(config);
   const body = buildBody(config, params);
+  const timeoutMs = params.timeoutMs || REQUEST_TIMEOUT_MS;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      // 這顆 signal 同時蓋住「等標頭」與「讀 body」兩段——串流讀到一半上游靜默斷線也會收到 abort。
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+      throw new Error(`AI 請求超時（${Math.round(timeoutMs / 1000)}s 沒有結果）`);
+    }
+    throw err;
+  }
 
   if (!response.ok) {
     let errorText = '';
@@ -195,7 +215,10 @@ async function makeRequest(config, params) {
   return response;
 }
 
-async function* streamAnthropic(response) {
+/**
+ * SSE 行 → 已解析的 JSON 事件。兩種 wire format 共用。
+ */
+async function* sseEvents(response) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -213,12 +236,8 @@ async function* streamAnthropic(response) {
       if (!trimmed || !trimmed.startsWith('data: ')) continue;
       const data = trimmed.slice(6);
       if (data === '[DONE]') return;
-
       try {
-        const json = JSON.parse(data);
-        if (json.type === 'content_block_delta' && json.delta?.text) {
-          yield json.delta.text;
-        }
+        yield JSON.parse(data);
       } catch {
         // skip unparseable lines
       }
@@ -226,33 +245,71 @@ async function* streamAnthropic(response) {
   }
 }
 
-async function* streamOpenAI(response) {
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+/**
+ * 把一條串流收完，重組成「跟非串流回應同一個形狀」的物件，
+ * 好讓 extractAnalyzeJson / responseText / completionMeta 一份邏輯吃兩條路。
+ *
+ * 為什麼通讀要走串流：OpenCode Go 的**非串流**請求 60 秒必斷，而實測同一篇論文
+ * 在 max_tokens=2000（完成 1,968 tokens）時就已經要 38.9 秒——把預算拉到 8000
+ * 之後非串流鐵定撞牆。串流的首字節很早到，之後一路有資料流，躲開那道 60 秒閘。
+ * @returns {object} 非串流形狀的回應物件
+ */
+export async function collectStream(config, response) {
+  let content = '';
+  let reasoning = '';
+  let finishReason = null;
+  let usage = null;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith('data: ')) continue;
-      const data = trimmed.slice(6);
-      if (data === '[DONE]') return;
-
-      try {
-        const json = JSON.parse(data);
-        const delta = json.choices?.[0]?.delta?.content;
-        if (delta) yield delta;
-      } catch {
-        // skip unparseable lines
+  if (config.format === 'anthropic') {
+    for await (const event of sseEvents(response)) {
+      if (event.type === 'content_block_delta') {
+        if (event.delta?.text) content += event.delta.text;
+        if (event.delta?.thinking) reasoning += event.delta.thinking;
       }
+      if (event.type === 'message_delta') {
+        if (event.delta?.stop_reason) finishReason = event.delta.stop_reason;
+        if (event.usage) usage = { ...(usage || {}), ...event.usage };
+      }
+      if (event.type === 'message_start' && event.message?.usage) usage = event.message.usage;
     }
+    return {
+      content: [
+        ...(reasoning ? [{ type: 'thinking', thinking: reasoning }] : []),
+        { type: 'text', text: content },
+      ],
+      stop_reason: finishReason,
+      ...(usage ? { usage } : {}),
+    };
+  }
+
+  for await (const event of sseEvents(response)) {
+    const choice = event.choices?.[0];
+    if (choice?.delta?.content) content += choice.delta.content;
+    if (choice?.delta?.reasoning_content) reasoning += choice.delta.reasoning_content;
+    if (choice?.finish_reason) finishReason = choice.finish_reason;
+    if (event.usage) usage = event.usage;
+  }
+  return {
+    choices: [{
+      finish_reason: finishReason,
+      message: { role: 'assistant', content, ...(reasoning ? { reasoning_content: reasoning } : {}) },
+    }],
+    ...(usage ? { usage } : {}),
+  };
+}
+
+export async function* streamAnthropic(response) {
+  for await (const json of sseEvents(response)) {
+    if (json.type === 'content_block_delta' && json.delta?.text) {
+      yield json.delta.text;
+    }
+  }
+}
+
+export async function* streamOpenAI(response) {
+  for await (const json of sseEvents(response)) {
+    const delta = json.choices?.[0]?.delta?.content;
+    if (delta) yield delta;
   }
 }
 
@@ -382,9 +439,9 @@ async function buildAnalyzeUserContent(config, fullText, pdfPath) {
         ],
         max_tokens: 3000,
         temperature: 0.1,
-        stream: false,
+        stream: true,
       });
-      const visualNotes = responseText(visionConfig, await response.json());
+      const visualNotes = responseText(visionConfig, await collectStream(visionConfig, response));
       if (visualNotes) {
         return `${text}\n\n[視覺模型對圖表頁的證據筆記]\n${visualNotes}\n\n請把上述視覺筆記與正文交叉驗證；若衝突，以明確可核對的原文與圖表為準。`;
       }
@@ -419,22 +476,16 @@ export async function analyzePaper(fullText, { pdfPath } = {}) {
     { role: 'user', content: userContent },
   ];
 
+  // 串流，不是為了逐字顯示（通讀沒有逐字 UI），是為了躲 OpenCode Go 的 60 秒非串流閘門：
+  // 實測 max_tokens=2000 就要 38.9 秒，預算拉到 8000 之後非串流必撞牆。
   const response = await makeRequest({ ...config, scope: 'analyze' }, {
     messages,
     max_tokens: ANALYZE_MAX_TOKENS,
     temperature: 0.2,
-    stream: false,
+    stream: true,
   });
 
-  const raw = await response.text();
-  let json;
-  try {
-    json = JSON.parse(raw);
-  } catch {
-    throw new Error('AI API 返回的外層 JSON 無法解析: ' + raw.slice(0, 200));
-  }
-
-  const result = extractAnalyzeJson(config, json);
+  const result = extractAnalyzeJson(config, await collectStream(config, response));
 
   return {
     title: result.title || '',

@@ -70,6 +70,27 @@ router.post('/upload', upload.array('files'), async (req, res) => {
   }
 });
 
+/**
+ * 啟動時把「上次進程死掉時還在通讀」的論文從 analyzing 收掉。
+ *
+ * triggerAnalyze 是 fire-and-forget 的 in-process promise：進程一死（`node --watch`
+ * 因為存檔而重啟、手動 Ctrl-C、crash），那條 promise 跟著消失，catch 不會跑，
+ * 於是連一行失敗日誌都沒有，而 analyze_status 永遠停在 'analyzing'，前端就一直轉圈。
+ * 2026-09-09 14:25 的兩篇就是這樣：14:26:24 服務重啟，它們掛了四分半沒有任何音訊，
+ * 她等不到只好刪掉。沒有人對帳的狀態＝永遠轉圈。
+ * @returns {number} 被收掉的篇數
+ */
+export function reconcileStuckAnalyses() {
+  const info = db.prepare(
+    `UPDATE papers SET analyze_status = 'error', analyze_error = ?
+     WHERE analyze_status = 'analyzing'`
+  ).run('上次通讀被服務重啟打斷，請重新通讀');
+  if (info.changes > 0) {
+    log('WARN', `啟動對帳：${info.changes} 篇論文上次通讀被重啟打斷，已標記為失敗`);
+  }
+  return info.changes;
+}
+
 async function triggerAnalyze(paperId) {
   try {
     db.prepare(`UPDATE papers SET analyze_status = 'analyzing' WHERE id = ?`).run(paperId);
