@@ -168,7 +168,7 @@ export default function App() {
       </div>
 
       {/* Upload zone - always visible in library */}
-      {page !== 'settings' && !uploading && (
+      {page !== 'settings' && !uploading && !detailReading && (
         <UploadZone onUploaded={loadData} />
       )}
 
