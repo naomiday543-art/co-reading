@@ -129,6 +129,13 @@
       .typing-dot:nth-child(3) { animation-delay: 0.4s; }
       .cr-pulse-dot { animation: cr-pulse 1.4s ease-in-out infinite; }
 
+      /* 聊天字級三檔（工單 06 §3.2）——--chat-fs 由 ChatPanel 外層掛上，
+         所以分欄裡和閱讀模式抽屜裡是同一份設定。ChatPanel 那四處 Tailwind
+         的 text-sm 必須拿掉，否則 utility 會蓋過這條。 */
+      .chat-bubble-ai, .chat-bubble-user, .prose-chat, .cr-chat-input {
+        font-size: var(--chat-fs, 14px);
+      }
+
       /* Markdown content inside chat */
       .prose-chat p { margin: 0 0 10px; }
       .prose-chat p:last-child { margin-bottom: 0; }
