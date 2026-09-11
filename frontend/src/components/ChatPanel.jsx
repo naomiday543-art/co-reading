@@ -64,7 +64,8 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
     try {
       const msgs = await papersApi.getMessages(paperId);
       setMessages(msgs);
-      onMessagesUpdated?.();
+      // 帶上條數，讓閱讀模式的浮鈕知道抽屜收著時有沒有來新回覆
+      onMessagesUpdated?.(msgs.length);
     } catch {}
   };
 

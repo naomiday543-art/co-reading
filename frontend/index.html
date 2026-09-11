@@ -149,6 +149,60 @@
       .cr-main--reading .cr-detail-topbar { padding: 12px 16px 0; }
       .cr-main--reading .cr-detail-split { padding: 0 16px 14px; }
 
+      /* 聊天抽屜：收起＝移出畫面 + visibility，不是 display:none／條件渲染，
+         這樣 ChatPanel 一直活著（串流不中斷），重新打開時也還有版面盒可以捲。
+         --cr-drawer-top 由 PaperDetail 量 header 高度後寫進 :root。 */
+      .cr-chat-drawer {
+        position: fixed; top: var(--cr-drawer-top, 50px); right: 0; bottom: 0;
+        z-index: 45;
+        display: flex; flex-direction: column; overflow: hidden;
+        padding: 14px 16px 16px;
+        background: var(--bg-tint);
+        border-left: 1px solid var(--border);
+        box-shadow: var(--shadow-lg);
+        transform: translateX(100%);
+        visibility: hidden;
+        transition: transform 0.22s ease, visibility 0s linear 0.22s;
+      }
+      .cr-chat-drawer--open {
+        transform: translateX(0);
+        visibility: visible;
+        transition: transform 0.22s ease, visibility 0s linear 0s;
+      }
+      .cr-chat-drawer-grip {
+        position: absolute; left: 0; top: 0; bottom: 0; width: 7px; z-index: 2;
+        cursor: col-resize; background: transparent; transition: background 0.15s;
+      }
+      .cr-chat-drawer-grip:hover { background: var(--accent-soft); }
+      .cr-chat-drawer-close {
+        position: absolute; top: 12px; right: 14px; z-index: 2;
+        width: 24px; height: 24px; border-radius: 8px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 12px; line-height: 1; color: var(--faint);
+        background: transparent; border: 0; cursor: pointer;
+        transition: color 0.15s, background 0.15s;
+      }
+      .cr-chat-drawer-close:hover { color: var(--text-strong); background: var(--surface-hover); }
+
+      /* 右下浮動按鈕（有未讀 AI 回覆時帶小點） */
+      .cr-chat-fab {
+        position: fixed; bottom: 20px; z-index: 50;
+        width: 48px; height: 48px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        background: var(--accent); color: var(--accent-fg);
+        border: 0; cursor: pointer; box-shadow: var(--shadow-lg);
+        transition: right 0.22s ease, background 0.15s, transform 0.15s;
+      }
+      .cr-chat-fab:hover { background: var(--accent-hover); transform: translateY(-1px); }
+      .cr-chat-fab-dot {
+        position: absolute; top: 8px; right: 8px;
+        width: 10px; height: 10px; border-radius: 50%;
+        background: var(--danger); border: 2px solid var(--accent);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .cr-chat-drawer, .cr-chat-drawer--open, .cr-chat-fab { transition: none; }
+      }
+
       /* ===== Responsive: <=767px collapses to the mobile form ===== */
       @media (max-width: 767px) {
         .cr-sidebar { display: none !important; }
@@ -161,6 +215,11 @@
         .cr-split-handle { display: none !important; }
         /* Give the sticky upload zone room above the tab bar */
         .cr-uploadzone { margin-bottom: 76px !important; }
+        /* 閱讀模式：抽屜吃滿寬，但讓開底部 tab bar；浮鈕也往上抬，
+           抽屜開著時整片蓋住畫面，浮鈕沒地方讓 → 收起來，用抽屜裡的 ✕／Esc 關 */
+        .cr-chat-drawer { width: 100vw !important; bottom: 66px; }
+        .cr-chat-fab { bottom: 78px; right: 20px !important; }
+        .cr-chat-fab--open { display: none !important; }
       }
       /* Bottom tab bar only shows on mobile */
       .cr-tabbar { display: none; }
