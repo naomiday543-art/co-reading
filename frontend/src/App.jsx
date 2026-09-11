@@ -36,7 +36,11 @@ export default function App() {
   const [paperId, setPaperId] = useState(initialNav.paperId);
   const [isFullscreen, setIsFullscreen] = useState(!!document.fullscreenElement);
   const [theme, setTheme] = useState(loadStoredTheme);
-  const { setPapers, setTags, setTree, uploading } = useStore();
+  const { setPapers, setTags, setTree, uploading, readingMode } = useStore();
+
+  // 閱讀模式只在論文頁生效：sidebar 收起、main 去掉 padding。
+  // Library / 洞察 / 設定完全不讀它（工單 06 §3.1）。
+  const detailReading = page === 'detail' && readingMode;
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -154,8 +158,8 @@ export default function App() {
 
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
-        {page !== 'settings' && <Sidebar onNavigate={navigate} onRefresh={loadData} />}
-        <main className="cr-main flex-1 overflow-y-auto p-6 bg-bg">
+        {page !== 'settings' && !detailReading && <Sidebar onNavigate={navigate} onRefresh={loadData} />}
+        <main className={`cr-main flex-1 overflow-y-auto p-6 bg-bg${detailReading ? ' cr-main--reading' : ''}`}>
           {page === 'library' && <Library onNavigate={navigate} onRefresh={loadData} />}
           {page === 'detail' && <PaperDetail paperId={paperId} onBack={() => navigate('library')} />}
           {page === 'insights' && <InsightsPanel onNavigate={navigate} />}

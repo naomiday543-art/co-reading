@@ -141,10 +141,20 @@
       code { background: var(--surface-alt); border: 1px solid var(--border-soft); padding: 0.05rem 0.3rem; border-radius: 5px; font-size: 0.88em; font-family: 'Geist Mono', ui-monospace, monospace; }
       blockquote { border-left: 2px solid var(--border); padding-left: 1rem; color: var(--muted); margin: 0.6rem 0; }
 
+      /* ===== 閱讀模式（工單 06 §3.1）=====
+         只在論文頁 + readingMode 時掛在 <main> 上。padding 必須 !important：
+         Tailwind CDN 的 style 是 runtime 注入的，排在這個 <style> 後面。 */
+      .cr-main--reading { padding: 0 !important; }
+      /* 去掉 main 的 padding 之後，頂列與分欄自己留一點呼吸 */
+      .cr-main--reading .cr-detail-topbar { padding: 12px 16px 0; }
+      .cr-main--reading .cr-detail-split { padding: 0 16px 14px; }
+
       /* ===== Responsive: <=767px collapses to the mobile form ===== */
       @media (max-width: 767px) {
         .cr-sidebar { display: none !important; }
         .cr-main { padding: 16px 16px 76px !important; }
+        /* 閱讀模式：一樣去 padding，但底部要留出 tab bar 的高度 */
+        .cr-main--reading { padding: 0 0 76px !important; }
         /* Paper detail: stack the summary/chat split vertically */
         .cr-detail-split { flex-direction: column !important; overflow-y: auto !important; }
         .cr-detail-pane { width: 100% !important; min-height: 60vh; }
