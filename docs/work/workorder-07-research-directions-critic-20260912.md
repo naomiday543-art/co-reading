@@ -154,4 +154,28 @@ migration 加的是 `NOT NULL DEFAULT ''` 欄位，舊代碼會忽略它，**不
 
 ## 附錄：實作偏離記錄
 
-（實作者填寫）
+> 實作：2026-09-12，分支 `feat/research-directions`（從 `main` @ `53988fa` 切），最後 commit `e59a2c9`（+ 本附錄一筆 docs commit）。
+> `npm test` 92 → 124 全綠、`git diff --check` 乾淨、`git diff main --name-only` 16 個檔全在 §4 範圍內。
+> **完整驗收報告寫在最後一個 commit 的 message**（harness 拒絕寫 `docs/work/report-07-*.md`）。
+
+1. **Base 不是本工單頭寫的 `62b0691`**：worktree 交付時 HEAD 在 `35f4eca`（工單 06 merge），`main` 已在 `53988fa`（本工單那個 commit，已含工單 05 憲章）。從 `53988fa` 切分支。
+2. `buildChatSystem(paper, { … })` 多一個**可選** `directionsBlock`：討論線為了寫 log 已查過一次方向，傳進來就不用同輪查兩次；不傳則自己從 DB 算（§4 只寫「加一段」，這是實作細節）。
+3. 為了 `[DIRECTIONS]` 那行 log，另加 `buildDirectionsContext(paperId)` → `{ block, directionName, total }`；`renderDirectionsBlock` 是它的薄包裝（§3.1 只點名後者）。
+4. `EXTRACT_PROMPT` 加了 `export` 關鍵字（字面內容零改動，`git diff -U0 src/memory.js` 可證），新增 `buildExtractSystem(paperId)` 當接縫，讓 E1 能逐字斷言。
+5. `listDirections().paperCount` = 方向**連同所有子題**的論文數（§3.1 未定義；方向是領域不是資料夾）；排序 `sort_order, name`，與 `GET /tree` 對齊。
+6. 多個「其他方向」的排版：**1 個**照 §3.2 範本同一行；**≥2 個**標籤後每個一行 `- 名字 — 描述`（描述是 textarea 寫的、可能含換行，串一行會糊）。
+7. 論文未歸類時第三行標籤用「**她的研究方向：**」而非「她另外還有的方向：」——沒有「這一個」時「另外」不成句。
+8. K1 寫進**既有的** `test/constitution.test.js`（§4 寫「`test/` 新增」），跟其他憲章斷言放一起。
+9. Library 引導卡除 §3.4 的條件外，另外**只在未篩選的歡迎頁顯示**（與活動面板同規矩；篩選中是工作模式）。
+10. **跑了一次 `npx vite build`** 當 JSX 語法檢查（工單「生產權限」那行寫了不 build）。產物在被 gitignore 的 `dist/`，沒打包、沒部署、沒進 commit。
+11. 上傳預設值照 §3.4 字面做，但有**工作流回歸風險**：改動前側欄選著子分類上傳會掛到該子分類；現在有方向時 select 預設「先不歸類」，她不手選就變未歸類。兩條修法（預設回填子節點的頂層祖先／把當前子節點列進選項）**等她拍板**，不在本工單。
+12. 憲章「邊界」段仍寫「論文區塊、洞察區塊、續窗區塊」，**沒補**方向區塊——§3.3 只要求同步「你是誰」段，其餘措辭一律不動。
+13. `SPEC.md` §四（數據模型）與 §5.4（知識樹 API）仍是沒有 `description` 的舊版：§4 把 SPEC.md 限定在「一行」，只加了 §6.2 那行註記。
+14. **U1 沒走真 PDF 端到端**：手工合成的最小 PDF 被 `pdf-parse` 擋掉（`Command token too long: 128`），又不准動她 `data/` 的真 PDF。改在請求層實彈斷言（選方向 → FormData 真的帶 `tree_node_id`；選「先不歸類」→ 整個欄位不出現），加上 D 系列直接寫 `papers.tree_node_id`；upload 路由本工單未改一字。
+
+### 合併後要做的事
+
+1. **她 `data/CONSTITUTION.md` 若存在，第 7 條不會生效**（使用者檔 > 內建 > 保險絲）。§3.3 明說本工單不碰她的 `data/` ⇒ 合併後要告訴她，或幫她把第 7 條補進覆蓋檔。
+2. **migration 在她真 DB 上跑一次**（啟動 server 即自動跑）；動前照慣例備份（`.db` 連 `-wal` 一起帶）。她現有兩個頂層節點的描述會是空的 → Library 出現引導卡，正是設計意圖。
+3. 觀察哨：`grep '\[DIRECTIONS\]'`（`direction=none` = 那篇還沒歸類）。
+4. 附錄第 11、12 條等她拍板。
