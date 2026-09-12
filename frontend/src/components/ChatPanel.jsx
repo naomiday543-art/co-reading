@@ -522,9 +522,14 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
                 {extracting ? '… 提取中...' : '提取洞察'}
               </button>
               {extractResult && (
+                /* 工單 08 §3.5：三段各自 >0 才顯示；三段都是 0 時也要給一句回音，
+                   不然按了「提取洞察」之後畫面什麼都不變，看起來像壞了 */
                 <span className="text-xs text-fact">
-                  新增 {extractResult.insights.length} 條洞察
-                  {extractResult.skipped > 0 && `（${extractResult.skipped} 條進度已跳過）`}
+                  {[
+                    extractResult.insights.length > 0 && `新增 ${extractResult.insights.length} 條洞察`,
+                    extractResult.skipped > 0 && `${extractResult.skipped} 條進度已跳過`,
+                    extractResult.duplicates > 0 && `${extractResult.duplicates} 條與既有洞察重複已略過`,
+                  ].filter(Boolean).join('；') || '沒有新的洞察'}
                 </span>
               )}
             </>

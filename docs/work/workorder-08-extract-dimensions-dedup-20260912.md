@@ -149,4 +149,32 @@
 
 ## 附錄：實作偏離記錄
 
-（實作者填寫）
+（實作者填寫 — 2026-09-12，分支 `feat/extract-dimensions`，五段 commit `8197621`→`13fbce6`）
+
+1. **分支 base**：工單寫 Base `main` @ `f6b9b07`，但 `main` tip 是 `5b9d931`（＝ `f6b9b07`
+   ＋「新增本工單文件」一個 commit）。分支從 `5b9d931` 切。代碼面兩者相同。
+2. **F1 的驗收方式**：repo 沒有 jsdom／react-testing-library，§4 禁止裝套件、也沒把「新增
+   前端模組」列進允許清單（把組字邏輯抽成 node 測得到的檔就得新增前端檔）。F1 改成
+   (a) 單元測試釘 `ChatPanel.jsx` 那段組字的**原文**（三段文案 ＋ 各自的 `> 0` 守門 ＋
+   舊的無條件寫法已移除）、(b) `npx vite` 實際轉譯那支檔（HTTP 200、轉譯後看得到三段文案）。
+   **沒有**在 DOM 上斷言「畫面出現 2 條…」。
+3. **三段都是 0 時補一句文案**：§3.5 只寫「各自 >0 才顯示」，照字面做會變成提取完一片空白、
+   看起來像壞了。補 `沒有新的洞察`。不要就刪 `|| '沒有新的洞察'`。
+4. **`findDuplicate` 的 exact 也帶 `score: 1`**：§3.4 型別寫 `{ kind:'exact', id }`，但同節
+   log 格式 `kind=exact|near score=…` 兩種都要 score。為了 log 一個形狀，多回一個欄位。
+5. **空正文且 reasoning 無可救時改成拋錯**（舊行為：靜默回 0 條）。§3.1 要求沿 analyze 的
+   空正文診斷規則，analyze 是拋錯；「HTTP 200 但正文空」是上游失敗，不是「沒有可提取的內容」，
+   混在一起正是 9/9 事故難查的原因。`{"entries":[]}` 這種合法空結果不受影響。
+6. **提取線不走 `ai.js` 的 `makeRequest`**：它會把 `res` 吃掉，而提取要自己判 `res.ok`
+   並做自己的診斷（「調高 EXTRACT_MAX_TOKENS」）。所以是自己 fetch ＋ `collectStream`，
+   與 `analyzePaper` 同形；`buildHeaders({ ...config, scope: 'extract' })`。
+7. **`bigramJaccard` 內部自己 normalize**（§3.4 把兩個函式分列，沒寫誰呼叫誰）。
+   這樣 `findDuplicate` 只有一條路徑，閾值語義也只有一種。
+8. **`src/ai.js` 的唯一改動**：`responseText` 由檔案私有升為 `export`（函式體一字未動），
+   讓提取線與通讀線共用同一份 wire format 取正文規則。
+9. **`src/routes/insights.js` 沒動**：檔尾本來就有 `export { DIMENSIONS }`（§4 說確認即可）。
+10. **測試踩到的坑（留給下一個人）**：`EXTRACT_PROMPT` 本身就寫著「見【她的研究方向】」
+    「見【已有洞察】」，所以「區塊有沒有被注入」只能斷言 `system.slice(EXTRACT_PROMPT.length)`
+    那段 tail；拿整個 system 做 `includes` 會永遠為真。第一版測試就是這樣假綠／假紅的。
+11. **完整驗收報告**：harness 拒絕寫 `docs/work/report-08-*.md`（subagent 不得產出報告檔），
+    依派工指示改放最後一個 commit（`13fbce6`）的 message。
