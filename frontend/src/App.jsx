@@ -6,6 +6,7 @@ import UploadZone from './components/UploadZone';
 import Library from './pages/Library';
 import PaperDetail from './pages/PaperDetail';
 import Settings from './pages/Settings';
+import Compare from './pages/Compare';
 import InsightsPanel from './components/InsightsPanel';
 
 const NAV_STORAGE_KEY = 'co-reading:nav';
@@ -162,6 +163,8 @@ export default function App() {
         <main className={`cr-main flex-1 overflow-y-auto p-6 bg-bg${detailReading ? ' cr-main--reading' : ''}`}>
           {page === 'library' && <Library onNavigate={navigate} onRefresh={loadData} />}
           {page === 'detail' && <PaperDetail paperId={paperId} onBack={() => navigate('library')} />}
+          {/* 摘要對比（工單 09 §3.3）：sidebar 照常，不進 mobile tabbar */}
+          {page === 'compare' && <Compare onNavigate={navigate} />}
           {page === 'insights' && <InsightsPanel onNavigate={navigate} />}
           {page === 'settings' && <Settings />}
         </main>
