@@ -8,6 +8,7 @@
 // 全部走 mock fetch（覆寫 globalThis.fetch），不打真上游、不碰她的 DB。
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { nanoid } from 'nanoid';
 
 import db, { setSetting } from '../src/db.js';
@@ -684,5 +685,34 @@ describe('D 落庫前去重', () => {
     const lonely = addPaper();
     assert.deepEqual(await extractInsights(lonely), { insights: [], skipped: 0, duplicates: 0 });
     clearAll();
+  });
+});
+
+// ── F：前端文案（工單 08 §3.5）───────────────────────────────────────
+// 這裡沒有 jsdom／react-testing-library，而工單 §4 不准裝套件、也不准新增前端模組，
+// 所以 F1 釘的是 ChatPanel.jsx 裡那段組字邏輯的**原文**：三段文案各自帶 >0 的守門，
+// 加上「三段都 0 也要有一句回音」。真正的畫面以 vite 起站親看（報告 §F1）。
+
+describe('F 前端提取結果文案', () => {
+  const source = readFileSync(
+    new URL('../frontend/src/components/ChatPanel.jsx', import.meta.url),
+    'utf-8',
+  );
+
+  it('F1 三段文案與各自的 >0 守門都在', () => {
+    assert.ok(source.includes('extractResult.insights.length > 0 && `新增 ${extractResult.insights.length} 條洞察`'), '新增段');
+    assert.ok(source.includes('extractResult.skipped > 0 && `${extractResult.skipped} 條進度已跳過`'), '進度段');
+    assert.ok(
+      source.includes('extractResult.duplicates > 0 && `${extractResult.duplicates} 條與既有洞察重複已略過`'),
+      '重複段（工單 §3.5 新增的那一條）',
+    );
+  });
+
+  it('F1b 三段都 0 時有回音，不是一片空白', () => {
+    assert.ok(source.includes(".filter(Boolean).join('；') || '沒有新的洞察'"), source.match(/filter\(Boolean\)[^\n]*/)?.[0]);
+  });
+
+  it('F1c 舊的無條件「新增 N 條洞察」寫法已經拿掉', () => {
+    assert.ok(!source.includes('新增 {extractResult.insights.length} 條洞察'));
   });
 });
