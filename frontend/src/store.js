@@ -15,6 +15,17 @@ export function nextChatFontSize(size) {
   return CHAT_FONT_SIZES[(idx + 1) % CHAT_FONT_SIZES.length];
 }
 
+// ── 多篇對比（工單 09 §3.3）────────────────────────────────────────
+// 上下限與後端 src/compare.js 的 MIN_PAPERS / MAX_PAPERS 是同一組數字；
+// 後端才是閘門（400），前端只是先擋住不讓她白跑一趟。
+export const COMPARE_MIN = 2;
+export const COMPARE_MAX = 4;
+
+/** 同一組論文的穩定 key：排序後 join，所以勾選順序不同但同一組＝同一個 key。 */
+export function compareKey(ids) {
+  return [...ids].sort().join(',');
+}
+
 function loadReadingMode() {
   try {
     return localStorage.getItem(READING_MODE_KEY) === '1';
@@ -87,6 +98,23 @@ export const useStore = create((set, get) => ({
   setInsights: (insights) => set({ insights }),
   selectedInsightDimension: null,
   setSelectedInsightDimension: (d) => set({ selectedInsightDimension: d }),
+
+  // 多篇對比的勾選（工單 09 §3.3）。
+  // **不持久化**：重整就清掉——選一組論文是一次動作，不是一個偏好。
+  compareSelection: [],
+  toggleCompare: (id) => set(s => {
+    if (s.compareSelection.includes(id)) {
+      return { compareSelection: s.compareSelection.filter(x => x !== id) };
+    }
+    // 滿了就不加（上限由 prompt 的 40k 字天花板決定，見 src/compare.js）。
+    if (s.compareSelection.length >= COMPARE_MAX) return {};
+    return { compareSelection: [...s.compareSelection, id] };
+  }),
+  clearCompare: () => set({ compareSelection: [] }),
+
+  // 對比結果：以「ids 排序後 join」當 key，返回 Library 再進來同一組不重打（§3.3）。
+  compareResult: null,
+  setCompareResult: (result) => set({ compareResult: result }),
 
   // Upload
   uploading: false,
