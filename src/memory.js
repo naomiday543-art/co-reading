@@ -14,6 +14,7 @@ import {
 import { syncInsightFireAndForget } from './gateway.js';
 import { renderDirectionsBlock } from './directions.js';
 import { findRelatedInsights } from './search.js';
+import { findDuplicate, DEDUP_NEAR_THRESHOLD } from './dedup.js';
 // 六個維度的唯一事實源（工單 08 §3.2）。routes/insights.js 檔尾已 export，別在這裡複製一份。
 import { DIMENSIONS } from './routes/insights.js';
 
@@ -283,8 +284,12 @@ function parseExtractResponse(raw) {
 /**
  * Extract insights from a paper's discussion history.
  * Writes directly to the insights table.
+ *
+ * 去重（工單 08 §3.4）是落庫前的第二道閘：同一次回應內先互相比，再比同篇既有洞察。
+ * 命中的不 INSERT、不出海，計入回傳的 duplicates。只比**同一篇**——跨論文相似不是重複，
+ * 那是「共振」「闪回」的材料（§5 紅線）。
  * @param {string} paperId
- * @returns {Promise<{insights: object[], skipped: number}>}
+ * @returns {Promise<{insights: object[], skipped: number, duplicates: number}>}
  */
 export async function extractInsights(paperId) {
   const messages = db.prepare(
@@ -293,7 +298,7 @@ export async function extractInsights(paperId) {
 
   if (messages.length < 2) {
     log('INFO', `記憶提取跳過: ${paperId}（對話不足 2 條）`);
-    return { insights: [], skipped: 0 };
+    return { insights: [], skipped: 0, duplicates: 0 };
   }
 
   const transcript = messages
@@ -301,7 +306,7 @@ export async function extractInsights(paperId) {
     .join('\n');
 
   if (!transcript.trim()) {
-    return { insights: [], skipped: 0 };
+    return { insights: [], skipped: 0, duplicates: 0 };
   }
 
   const config = getChatConfig();
@@ -317,19 +322,39 @@ export async function extractInsights(paperId) {
 
   if (!entries || entries.length === 0) {
     log('INFO', `記憶提取完成: ${paperId} → 0 條（無可提取內容）`);
-    return { insights: [], skipped: 0 };
+    return { insights: [], skipped: 0, duplicates: 0 };
   }
 
   const paper = db.prepare('SELECT title FROM papers WHERE id = ?').get(paperId);
 
+  // 去重的比對池：同篇既有洞察（DB）＋這一輪已經收下的（模型可能同輪吐兩條近似）。
+  const existingInPaper = db.prepare(
+    'SELECT id, content FROM insights WHERE source_paper_id = ?'
+  ).all(paperId);
+  const acceptedThisRound = [];
+
   const created = [];
   let skipped = 0;
+  let duplicates = 0;
 
   for (const entry of entries) {
     if (entry.type === 'progress') {
       // progress entries go to section_progress only, not insights
       log('INFO', `記憶提取: ${paperId} → progress（跳過，不入 insights）: ${entry.content.slice(0, 60)}`);
       skipped++;
+      continue;
+    }
+
+    // §3.4 的順序：先同一次回應內互相去重，再比 DB 既有的。
+    const dup = findDuplicate(entry.content, acceptedThisRound)
+      || findDuplicate(entry.content, existingInPaper);
+    if (dup) {
+      log(
+        'INFO',
+        `[DEDUP] paper=${paperId} kind=${dup.kind} score=${dup.score.toFixed(2)}`
+        + ` threshold=${DEDUP_NEAR_THRESHOLD} vs=${dup.id}: ${entry.content.slice(0, 60)}`,
+      );
+      duplicates++;
       continue;
     }
 
@@ -357,6 +382,8 @@ export async function extractInsights(paperId) {
     // 絕不 await、絕不阻塞閱讀主流程；失敗留 synced_at IS NULL 靠啟動補傳。
     syncInsightFireAndForget(db.prepare('SELECT * FROM insights WHERE id = ?').get(id));
 
+    acceptedThisRound.push({ id, content: entry.content });
+
     log('INFO', `記憶提取: ${paperId} → [${dimension}] ${entry.content.slice(0, 60)}`);
     created.push({
       id,
@@ -370,6 +397,10 @@ export async function extractInsights(paperId) {
     });
   }
 
-  log('INFO', `記憶提取完成: ${paperId} → ${created.length} 條洞察, ${skipped} 條 progress 跳過`);
-  return { insights: created, skipped };
+  log(
+    'INFO',
+    `記憶提取完成: ${paperId} → ${created.length} 條洞察, ${skipped} 條 progress 跳過`
+    + `, ${duplicates} 條重複略過`,
+  );
+  return { insights: created, skipped, duplicates };
 }

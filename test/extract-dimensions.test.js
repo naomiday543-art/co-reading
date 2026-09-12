@@ -493,6 +493,26 @@ describe('B 提取 system 的組裝', () => {
     clearAll();
   });
 
+  it('B3c 區塊組裝失敗時退回「什麼都不注入」，不讓提取掛掉', () => {
+    clearAll();
+    clearNodes();
+    const paperId = addPaper();
+    const realPrepare = db.prepare;
+    db.prepare = (sql) => {
+      if (sql.includes('FROM insights WHERE source_paper_id = ? ORDER BY created_at')) {
+        throw new Error('boom');
+      }
+      return realPrepare.call(db, sql);
+    };
+    try {
+      assert.equal(renderExistingInsightsBlock(paperId), '');
+      assert.equal(buildExtractSystem(paperId), EXTRACT_PROMPT);
+    } finally {
+      db.prepare = realPrepare;
+    }
+    clearAll();
+  });
+
   it('B3b 只有其他論文有洞察時也成立（本篇段整段省略）', () => {
     clearAll();
     clearNodes();
@@ -504,6 +524,165 @@ describe('B 提取 system 的組裝', () => {
     assert.ok(block.startsWith('【已有洞察】'));
     assert.ok(!block.includes('本篇已提取'));
     assert.ok(block.includes('- 《別篇》[概念]'));
+    clearAll();
+  });
+});
+
+// ── D：落庫前去重（第二道閘）─────────────────────────────────────────
+
+describe('D 落庫前去重', () => {
+  before(installFetch);
+  after(() => { restoreFetch(); clearAll(); });
+  beforeEach(() => { captured.length = 0; nextResponse = null; useBase('https://api.openai.com/v1'); });
+
+  const BASE = '膽固醇會改變奈米粒子表面蛋白冠的組成';
+
+  function addInsight(paperId, content, dimension = '概念') {
+    const id = `ins_${nanoid(8)}`;
+    db.prepare(`INSERT INTO insights (id, dimension, title, content, source_paper_id, source_context, tags_json)
+      VALUES (?, ?, ?, ?, ?, '', '[]')`).run(id, dimension, content.slice(0, 80), content, paperId);
+    return id;
+  }
+
+  function respondWith(entries) {
+    nextResponse = () => openaiStream([JSON.stringify({ entries })]);
+  }
+
+  /** 跑一次提取並把 log 行收下來（[DEDUP] 要驗）。 */
+  async function extractCapturingLogs(paperId) {
+    const originalLog = console.log;
+    const lines = [];
+    console.log = (...args) => { lines.push(args.join(' ')); };
+    try {
+      const result = await extractInsights(paperId);
+      return { result, lines };
+    } finally {
+      console.log = originalLog;
+    }
+  }
+
+  it('D1 exact（只差標點）→ 不 INSERT、duplicates+1、不出海', async () => {
+    const paperId = addPaper();
+    addMessages(paperId);
+    const existingId = addInsight(paperId, BASE);
+    respondWith([{ type: 'fact', dimension: '概念', content: '膽固醇，會改變奈米粒子表面蛋白冠的組成。' }]);
+
+    const { result, lines } = await extractCapturingLogs(paperId);
+
+    assert.equal(result.insights.length, 0);
+    assert.equal(result.duplicates, 1);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM insights WHERE source_paper_id = ?').get(paperId).n, 1);
+    const dedupLine = lines.find(l => l.includes('[DEDUP]'));
+    assert.ok(dedupLine, lines.join('\n'));
+    assert.match(dedupLine, /kind=exact/);
+    assert.match(dedupLine, new RegExp(`vs=${existingId}`));
+    // 不出海：synced_at 只可能是那條既有的（本來就沒同步），沒有新 row 被建出來
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM insights WHERE id != ? AND source_paper_id = ?')
+      .get(existingId, paperId).n, 0);
+    clearAll();
+  });
+
+  it('D2 near ≥0.6 → 不 INSERT，log 帶 score 與閾值', async () => {
+    const paperId = addPaper();
+    addMessages(paperId);
+    addInsight(paperId, BASE);
+    respondWith([{ type: 'fact', dimension: '概念', content: '膽固醇改變了奈米粒子表面蛋白冠的組成' }]);
+
+    const { result, lines } = await extractCapturingLogs(paperId);
+
+    assert.equal(result.insights.length, 0);
+    assert.equal(result.duplicates, 1);
+    const dedupLine = lines.find(l => l.includes('[DEDUP]'));
+    assert.ok(dedupLine, lines.join('\n'));
+    assert.match(dedupLine, /kind=near/);
+    assert.match(dedupLine, /score=0\.\d\d/);
+    assert.match(dedupLine, /threshold=0\.6/);
+    clearAll();
+  });
+
+  it('D3 0.46（同主題不同陳述）→ 照常 INSERT', async () => {
+    const paperId = addPaper();
+    addMessages(paperId);
+    addInsight(paperId, BASE);
+    const fresh = '膽固醇也會改變奈米粒子表面的蛋白吸附量';
+    respondWith([{ type: 'fact', dimension: '概念', content: fresh }]);
+
+    const result = await extractInsights(paperId);
+
+    assert.equal(result.insights.length, 1);
+    assert.equal(result.duplicates, 0);
+    assert.equal(result.insights[0].content, fresh);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM insights WHERE source_paper_id = ?').get(paperId).n, 2);
+    clearAll();
+  });
+
+  it('D4 同一輪回應內兩條近似 → 只入第一條', async () => {
+    const paperId = addPaper();
+    addMessages(paperId);
+    respondWith([
+      { type: 'fact', dimension: '概念', content: BASE },
+      { type: 'fact', dimension: '概念', content: '膽固醇改變了奈米粒子表面蛋白冠的組成' },
+      { type: 'hypothesis', dimension: '悬题', content: '靜態血清是否代表循環環境，尚未有人驗證' },
+    ]);
+
+    const { result, lines } = await extractCapturingLogs(paperId);
+
+    assert.equal(result.insights.length, 2);
+    assert.equal(result.duplicates, 1);
+    assert.deepEqual(result.insights.map(i => i.content), [BASE, '靜態血清是否代表循環環境，尚未有人驗證']);
+    // 同輪互重的 vs= 指向這一輪剛收下的那條
+    const dedupLine = lines.find(l => l.includes('[DEDUP]'));
+    assert.match(dedupLine, new RegExp(`vs=${result.insights[0].id}`));
+    clearAll();
+  });
+
+  it('D5 與「其他論文」的洞察幾乎一樣 → 仍 INSERT（那是共振的材料，不是重複）', async () => {
+    const paperId = addPaper({ title: '本篇' });
+    const otherId = addPaper({ title: '別篇' });
+    addMessages(paperId);
+    addInsight(otherId, BASE, '共振');
+    respondWith([{ type: 'fact', dimension: '共振', content: BASE }]);
+
+    const result = await extractInsights(paperId);
+
+    assert.equal(result.duplicates, 0);
+    assert.equal(result.insights.length, 1);
+    assert.equal(result.insights[0].dimension, '共振');
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM insights WHERE source_paper_id = ?').get(paperId).n, 1);
+    clearAll();
+  });
+
+  it('D6 對同一篇按第二次提取（模型吐一樣的東西）→ 0 條新增（附錄 A 的驗收形狀）', async () => {
+    const paperId = addPaper();
+    addMessages(paperId);
+    const entries = [
+      { type: 'fact', dimension: '概念', content: BASE },
+      { type: 'hypothesis', dimension: '悬题', content: '靜態血清是否代表循環環境，尚未有人驗證' },
+    ];
+    respondWith(entries);
+    const first = await extractInsights(paperId);
+    assert.equal(first.insights.length, 2);
+
+    respondWith(entries);
+    const second = await extractInsights(paperId);
+
+    assert.equal(second.insights.length, 0);
+    assert.equal(second.duplicates, 2);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM insights WHERE source_paper_id = ?').get(paperId).n, 2);
+    clearAll();
+  });
+
+  it('D7 回傳形狀：沒東西可提取時三個欄位都在', async () => {
+    const paperId = addPaper();
+    addMessages(paperId);
+    respondWith([]);
+
+    const result = await extractInsights(paperId);
+    assert.deepEqual(result, { insights: [], skipped: 0, duplicates: 0 });
+
+    // 對話不足 2 條那條路也一樣
+    const lonely = addPaper();
+    assert.deepEqual(await extractInsights(lonely), { insights: [], skipped: 0, duplicates: 0 });
     clearAll();
   });
 });
