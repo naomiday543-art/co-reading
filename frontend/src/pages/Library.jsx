@@ -4,14 +4,37 @@ import { papersApi } from '../api';
 import PaperCard from '../components/PaperCard';
 import ActivityPanel from '../components/ActivityPanel';
 
+// 首次引導（工單 07 §3.4）：關掉就不再出現。慣例跟 store.js 的偏好一樣，
+// 手寫 localStorage 並全部包 try/catch（隱私模式下會拋）。
+const DIRECTIONS_HINT_KEY = 'co-reading:directions-hint-dismissed';
+
+function loadHintDismissed() {
+  try {
+    return localStorage.getItem(DIRECTIONS_HINT_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export default function Library({ onNavigate, onRefresh }) {
   const {
     papers, selectedTreeNode, selectedTag,
-    searchQuery, sortBy,
+    searchQuery, sortBy, tree,
     setSearchQuery, setSortBy, setPapers,
   } = useStore();
 
   const [loading, setLoading] = useState(false);
+  const [hintDismissed, setHintDismissed] = useState(loadHintDismissed);
+
+  // 提示卡只在「沒有方向」或「所有方向都沒寫描述」時出現——寫了就功成身退。
+  const directions = tree || [];
+  const directionsNeedAttention = directions.length === 0
+    || directions.every(d => !(d.description || '').trim());
+
+  const dismissHint = () => {
+    try { localStorage.setItem(DIRECTIONS_HINT_KEY, '1'); } catch {}
+    setHintDismissed(true);
+  };
 
   useEffect(() => {
     loadPapers();
@@ -88,6 +111,28 @@ export default function Library({ onNavigate, onRefresh }) {
           </div>
         </div>
       </div>
+
+      {/* 研究方向引導卡（工單 07 §3.4）— 活動面板之上，可完全跳過 */}
+      {!hintDismissed && directionsNeedAttention && !selectedTag && !selectedTreeNode && !searchQuery && (
+        <div className="card p-4 mb-5 flex items-center gap-3 flex-wrap">
+          <p className="flex-1 text-[13.5px] text-text min-w-[220px]">
+            告訴 AI 你在做哪幾個方向，它才能替你連到自己的題目 →
+          </p>
+          <button
+            className="px-3.5 py-1.5 bg-accent text-accent-fg rounded-[10px] text-[13px] font-medium hover:bg-accent-hover shadow-sm shrink-0"
+            onClick={() => onNavigate('settings')}
+          >
+            去設定研究方向
+          </button>
+          <button
+            className="text-faint hover:text-muted px-1.5 shrink-0"
+            onClick={dismissHint}
+            title="關閉，不再顯示"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Activity panel — 只在未篩選狀態顯示（篩選時是工作模式，不是歡迎頁） */}
       {!selectedTag && !selectedTreeNode && !searchQuery && <ActivityPanel />}

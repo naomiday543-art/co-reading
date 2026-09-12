@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { settingsApi, logsApi } from '../api';
+import { settingsApi, logsApi, treeApi } from '../api';
 import { useStore, getProviderDefaults } from '../store';
 
 export default function Settings() {
@@ -8,6 +8,14 @@ export default function Settings() {
   const [apiKey, setApiKey] = useState('');
   const [status, setStatus] = useState(null); // { ok, message }
   const [testing, setTesting] = useState(false);
+
+  // 研究方向（工單 07 §3.4）：知識樹的頂層節點 + 一段寫給 AI 看的描述。
+  // directions 每筆 { id, name, description, saved }：saved = 後端目前存的值，
+  // 失焦時只在真的改了才 PATCH。
+  const [directions, setDirections] = useState([]);
+  const [newDirectionName, setNewDirectionName] = useState('');
+  const [directionErrors, setDirectionErrors] = useState({});
+  const [directionSaved, setDirectionSaved] = useState(null);
 
   // Advanced
   const [chatFormat, setChatFormat] = useState('anthropic');
@@ -26,7 +34,62 @@ export default function Settings() {
 
   useEffect(() => {
     loadSettings();
+    loadDirections();
   }, []);
+
+  const loadDirections = async () => {
+    try {
+      const tree = await treeApi.get();
+      useStore.getState().setTree(tree);
+      setDirections(tree.map(n => ({
+        id: n.id,
+        name: n.name,
+        description: n.description || '',
+        saved: n.description || '',
+      })));
+    } catch (err) {
+      // 後端還沒起來就先空著，不擋其他設定
+    }
+  };
+
+  const handleDescriptionChange = (id, value) => {
+    setDirections(prev => prev.map(d => (d.id === id ? { ...d, description: value } : d)));
+  };
+
+  // 失焦即存（工單 07 §3.4）。沒改就不發請求；後端退回的錯誤（例如超過 2000 字）直接顯示。
+  const handleDescriptionBlur = async (id) => {
+    const direction = directions.find(d => d.id === id);
+    if (!direction) return;
+    const next = direction.description.trim();
+    if (next === direction.saved) return;
+
+    try {
+      const updated = await treeApi.update(id, { description: next });
+      const savedValue = updated?.description ?? next;
+      setDirections(prev => prev.map(d => (
+        d.id === id ? { ...d, description: savedValue, saved: savedValue } : d
+      )));
+      setDirectionErrors(prev => ({ ...prev, [id]: null }));
+      setDirectionSaved(id);
+      setTimeout(() => setDirectionSaved(cur => (cur === id ? null : cur)), 1800);
+      const tree = await treeApi.get();
+      useStore.getState().setTree(tree);
+    } catch (err) {
+      setDirectionErrors(prev => ({ ...prev, [id]: err.message }));
+    }
+  };
+
+  const handleCreateDirection = async () => {
+    const name = newDirectionName.trim();
+    if (!name) return;
+    try {
+      await treeApi.create(name, null);
+      setNewDirectionName('');
+      await loadDirections();
+    } catch (err) {
+      setDirectionErrors(prev => ({ ...prev, __new: err.message }));
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -159,6 +222,67 @@ export default function Settings() {
       <p className="text-[13.5px] text-muted mb-6">API、模型、外觀。所有變更即時保存到本機。</p>
 
       <div className="space-y-5">
+        {/* 研究方向（工單 07 §3.4）— 知識樹頂層節點就是方向，放在 API 區塊之上 */}
+        <div className="card p-6" id="research-directions">
+          <h3 className="cr-serif text-[17px] font-semibold text-text-strong mb-1">研究方向</h3>
+          <p className="text-[12.5px] text-muted mb-4">
+            側欄知識樹的頂層分類就是你的研究方向。寫一句話告訴 AI 這個方向在做什麼，
+            它才判得出哪些是「你的研究」、哪些是「延伸」。可以留白，也可以之後再寫。
+          </p>
+
+          {directions.length === 0 ? (
+            <p className="text-[13px] text-faint mb-4">
+              還沒有方向。先新增一個（例如 nano plastics），上傳論文時就能歸類。
+            </p>
+          ) : (
+            <div className="space-y-4 mb-5">
+              {directions.map(d => (
+                <div key={d.id}>
+                  <div className="flex items-center justify-between mb-1.5 gap-2">
+                    <span className="text-[13.5px] font-medium text-text-strong truncate">{d.name}</span>
+                    {directionErrors[d.id] ? (
+                      <span className="text-xs text-danger shrink-0">✕ {directionErrors[d.id]}</span>
+                    ) : directionSaved === d.id ? (
+                      <span className="text-xs text-fact shrink-0">✓ 已儲存</span>
+                    ) : null}
+                  </div>
+                  <textarea
+                    rows={3}
+                    className="w-full border border-border bg-surface-alt rounded-[10px] px-3 py-2 text-[13px] text-text placeholder:text-faint focus:outline-none focus:border-accent resize-y"
+                    placeholder="這個方向在做什麼、關心什麼問題？寫給 AI 看的"
+                    value={d.description}
+                    onChange={e => handleDescriptionChange(d.id, e.target.value)}
+                    onBlur={() => handleDescriptionBlur(d.id)}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <input
+              className="flex-1 border border-border bg-surface-alt rounded-[10px] px-3 py-2 text-sm text-text placeholder:text-faint focus:outline-none focus:border-accent"
+              placeholder="新方向的名稱，例如 py-GCMS"
+              value={newDirectionName}
+              onChange={e => setNewDirectionName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleCreateDirection(); }}
+            />
+            <button
+              className="px-4 py-2 border border-border rounded-[10px] text-sm text-text hover:bg-surface-hover disabled:opacity-50 shrink-0"
+              onClick={handleCreateDirection}
+              disabled={!newDirectionName.trim()}
+            >
+              ＋ 新增方向
+            </button>
+          </div>
+          {directionErrors.__new && (
+            <p className="text-xs text-danger mt-2">✕ {directionErrors.__new}</p>
+          )}
+          <p className="text-xs text-faint mt-2">
+            刪除方向、新增子分類請在側欄的知識樹上操作。
+          </p>
+        </div>
+
         {/* API Key */}
         <div className="card p-6">
           <h3 className="cr-serif text-[17px] font-semibold text-text-strong mb-1">API Key</h3>

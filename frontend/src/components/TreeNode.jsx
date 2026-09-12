@@ -13,6 +13,10 @@ export default function TreeNode({ node, depth, selectedId, onSelect, onRefresh 
   const hasChildren = node.children && node.children.length > 0;
   const isSelected = selectedId === node.id;
 
+  // 頂層節點 = 研究方向（工單 07 §3.4）：hover 看得到描述前 60 字，編輯在設定頁。
+  const description = (node.description || '').trim();
+  const directionTitle = depth === 0 && description ? description.slice(0, 60) : undefined;
+
   const handleRename = async () => {
     if (editName.trim() && editName.trim() !== node.name) {
       await treeApi.update(node.id, { name: editName.trim() });
@@ -67,7 +71,7 @@ export default function TreeNode({ node, depth, selectedId, onSelect, onRefresh 
             onClick={e => e.stopPropagation()}
           />
         ) : (
-          <span className="flex-1 truncate">{node.name}</span>
+          <span className="flex-1 truncate" title={directionTitle}>{node.name}</span>
         )}
         {node.paper_count > 0 && (
           <span className="cr-mono text-[11px] text-faint">{node.paper_count}</span>

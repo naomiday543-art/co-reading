@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useStore } from '../store';
 import { papersApi } from '../api';
 
@@ -8,14 +8,33 @@ export default function UploadZone({ onUploaded }) {
   const [progress, setProgress] = useState([]);
   const fileInputRef = useRef(null);
 
+  // 上傳時選方向（工單 07 §3.4）：頂層節點才是方向。
+  // 一個方向都沒有時**不顯示** select，行為與工單 07 之前完全相同。
+  const tree = useStore(s => s.tree);
+  const selectedTreeNode = useStore(s => s.selectedTreeNode);
+  const directions = tree || [];
+  const [directionChoice, setDirectionChoice] = useState('');
+
+  // 預設 = 側欄當前選的節點，若它是頂層節點；否則「先不歸類」。
+  useEffect(() => {
+    const isDirection = directions.some(d => d.id === selectedTreeNode);
+    setDirectionChoice(isDirection ? selectedTreeNode : '');
+  }, [selectedTreeNode, tree]);
+
   const handleFiles = async (files) => {
     if (!files.length) return;
     setUploading(true);
     setProgress(Array.from(files).map(f => ({ name: f.name, status: 'uploading' })));
 
     try {
-      const selectedNode = useStore.getState().selectedTreeNode;
-      const treeNodeId = selectedNode && selectedNode !== '__none' ? selectedNode : undefined;
+      const hasDirections = (useStore.getState().tree || []).length > 0;
+      let treeNodeId;
+      if (hasDirections) {
+        treeNodeId = directionChoice || undefined;
+      } else {
+        const selectedNode = useStore.getState().selectedTreeNode;
+        treeNodeId = selectedNode && selectedNode !== '__none' ? selectedNode : undefined;
+      }
       const results = await papersApi.upload(files, treeNodeId);
 
       // Update progress with results
@@ -62,6 +81,24 @@ export default function UploadZone({ onUploaded }) {
             <p className="text-[13px] text-muted">
               將 PDF 拖拽到此處上傳，或 <span className="text-accent hover:underline">點擊選擇文件</span> · 支援批次匯入
             </p>
+            {directions.length > 0 && (
+              <div
+                className="flex items-center gap-1.5"
+                onClick={e => e.stopPropagation()}
+              >
+                <span className="text-[12.5px] text-faint">這篇屬於：</span>
+                <select
+                  className="text-[12.5px] border border-border rounded-lg bg-surface px-2 py-1 text-text cursor-pointer focus:outline-none focus:border-accent"
+                  value={directionChoice}
+                  onChange={e => setDirectionChoice(e.target.value)}
+                >
+                  <option value="">先不歸類</option>
+                  {directions.map(d => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </>
         )}
       </div>
