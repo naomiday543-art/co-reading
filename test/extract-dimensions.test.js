@@ -11,7 +11,13 @@ import assert from 'node:assert/strict';
 import { nanoid } from 'nanoid';
 
 import db, { setSetting } from '../src/db.js';
-import { extractInsights, EXTRACT_MAX_TOKENS, EXTRACT_PROMPT } from '../src/memory.js';
+import {
+  extractInsights,
+  buildExtractSystem,
+  renderExistingInsightsBlock,
+  EXTRACT_MAX_TOKENS,
+  EXTRACT_PROMPT,
+} from '../src/memory.js';
 
 // ── mock 上游 ───────────────────────────────────────────────────────
 
@@ -359,5 +365,145 @@ describe('P 六維度直出', () => {
     for (const t of ['**fact**', '**hypothesis**', '**progress**']) {
       assert.ok(EXTRACT_PROMPT.includes(t), t);
     }
+  });
+});
+
+// ── B：提取 system 的三段組裝（零回歸線在這裡）──────────────────────
+
+describe('B 提取 system 的組裝', () => {
+  after(clearAll);
+
+  function addInsight(paperId, { dimension = '概念', content = '一條既有洞察的內容' } = {}) {
+    const id = `ins_${nanoid(8)}`;
+    db.prepare(`INSERT INTO insights (id, dimension, title, content, source_paper_id, source_context, tags_json)
+      VALUES (?, ?, ?, ?, ?, '', '[]')`).run(id, dimension, content.slice(0, 80), content, paperId);
+    return id;
+  }
+
+  function addNode(name, { description = '', sortOrder = 0 } = {}) {
+    const id = `ext_node_${nanoid(8)}`;
+    db.prepare('INSERT INTO tree_nodes (id, parent_id, name, sort_order, description) VALUES (?, NULL, ?, ?, ?)')
+      .run(id, name, sortOrder, description);
+    return id;
+  }
+
+  function clearNodes() {
+    db.prepare("DELETE FROM tree_nodes WHERE id LIKE 'ext_node_%'").run();
+  }
+
+  it('B1 無方向且無洞察：逐字等於 EXTRACT_PROMPT（零回歸線）', () => {
+    clearAll();
+    clearNodes();
+    const paperId = addPaper();
+
+    assert.equal(buildExtractSystem(paperId), EXTRACT_PROMPT);
+    assert.equal(buildExtractSystem(paperId).slice(EXTRACT_PROMPT.length), '', '一個換行都不得多');
+    clearAll();
+  });
+
+  it('B1b 無方向但有洞察：加「這兩個維度不要用」補句，且排在已有洞察之前', () => {
+    clearAll();
+    clearNodes();
+    const paperId = addPaper();
+    addInsight(paperId, { content: '膽固醇改變蛋白冠組成' });
+
+    const system = buildExtractSystem(paperId);
+    assert.ok(system.startsWith(EXTRACT_PROMPT), '提取 prompt 必須在最前面');
+    // 注意：EXTRACT_PROMPT 本身就寫著「見【她的研究方向】」「見【已有洞察】」，
+    // 所以「有沒有注入區塊」只能看接在後面的那一段（tail），不能看整個 system。
+    const tail = system.slice(EXTRACT_PROMPT.length);
+    assert.ok(tail.includes('這兩個維度不要用'), tail);
+    assert.ok(!tail.includes('【她的研究方向】'), tail);
+    assert.ok(
+      tail.indexOf('這兩個維度不要用') < tail.indexOf('【已有洞察】'),
+      '補句要排在【已有洞察】之前',
+    );
+    clearAll();
+  });
+
+  it('B2 有方向：不加補句、含方向區塊，三段順序是 prompt → 方向 → 已有洞察', () => {
+    clearAll();
+    clearNodes();
+    const nodeId = addNode('nano plastics', { description: '奈米塑膠在血液中的分佈', sortOrder: 1 });
+    const paperId = addPaper({ treeNodeId: nodeId });
+    addInsight(paperId, { content: '膽固醇改變蛋白冠組成' });
+
+    const system = buildExtractSystem(paperId);
+    assert.ok(system.startsWith(EXTRACT_PROMPT));
+    const tail = system.slice(EXTRACT_PROMPT.length);
+    assert.ok(!tail.includes('這兩個維度不要用'), '有方向就不得出現補句');
+    assert.ok(tail.includes('【她的研究方向】'), tail);
+    assert.ok(
+      tail.indexOf('【她的研究方向】') < tail.indexOf('【已有洞察】'),
+      '方向在已有洞察之前',
+    );
+    clearAll();
+    clearNodes();
+  });
+
+  it('B2b 有方向但無洞察：只接方向區塊，不帶【已有洞察】', () => {
+    clearAll();
+    clearNodes();
+    const nodeId = addNode('nano plastics', { description: '奈米塑膠', sortOrder: 1 });
+    const paperId = addPaper({ treeNodeId: nodeId });
+
+    const system = buildExtractSystem(paperId);
+    const tail = system.slice(EXTRACT_PROMPT.length);
+    assert.ok(tail.includes('【她的研究方向】'), tail);
+    assert.ok(!tail.includes('【已有洞察】'), tail);
+    assert.ok(!tail.includes('這兩個維度不要用'), tail);
+    clearAll();
+    clearNodes();
+  });
+
+  it('B3 已有洞察區塊：本篇條目 ≤30、其他論文帶書名號標題、各截 120 字', () => {
+    clearAll();
+    clearNodes();
+    const paperId = addPaper({ title: '本篇 Cholesterol corona' });
+    const otherId = addPaper({ title: 'Nanoplastic corona 另一篇' });
+
+    const longContent = '蛋白冠'.repeat(60); // 180 字
+    for (let i = 0; i < 35; i++) {
+      addInsight(paperId, { dimension: i === 0 ? '悬题' : '概念', content: `${longContent}#${i}` });
+    }
+    // 其他論文：標題要撈得到才會被 findRelatedInsights 拉進來
+    addInsight(otherId, { dimension: '共振', content: '本篇 Cholesterol corona 這個說法與我們的結果呼應' });
+
+    const block = renderExistingInsightsBlock(paperId);
+
+    assert.ok(block.startsWith('【已有洞察】'));
+    assert.ok(block.includes('本篇已提取（不要重複提取語義相同的條目）：'));
+
+    const ownLines = block.split('\n').filter(l => l.startsWith('- [') );
+    assert.equal(ownLines.length, 30, '本篇上限 30 條');
+    for (const line of ownLines) {
+      const content = line.replace(/^- \[[^\]]+\] /, '');
+      assert.equal(content.length, 121, `120 字 + 省略號: ${content.length}`);
+      assert.ok(content.endsWith('…'));
+    }
+
+    assert.ok(block.includes('來自其他論文（判斷「闪回」「共振」時引用；每條前面標了論文標題）：'), block);
+    const otherLines = block.split('\n').filter(l => l.startsWith('- 《'));
+    assert.equal(otherLines.length, 1, block);
+    assert.match(otherLines[0], /^- 《Nanoplastic corona 另一篇》\[共振\] /);
+
+    // 區塊真的上了飛機（不只是函式回傳字串）
+    const system = buildExtractSystem(paperId);
+    assert.ok(system.includes(block));
+    clearAll();
+  });
+
+  it('B3b 只有其他論文有洞察時也成立（本篇段整段省略）', () => {
+    clearAll();
+    clearNodes();
+    const paperId = addPaper({ title: '本篇 Unique corona marker' });
+    const otherId = addPaper({ title: '別篇' });
+    addInsight(otherId, { dimension: '概念', content: '本篇 Unique corona marker 的方法我們也用過' });
+
+    const block = renderExistingInsightsBlock(paperId);
+    assert.ok(block.startsWith('【已有洞察】'));
+    assert.ok(!block.includes('本篇已提取'));
+    assert.ok(block.includes('- 《別篇》[概念]'));
+    clearAll();
   });
 });

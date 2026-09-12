@@ -13,6 +13,7 @@ import {
 } from './ai.js';
 import { syncInsightFireAndForget } from './gateway.js';
 import { renderDirectionsBlock } from './directions.js';
+import { findRelatedInsights } from './search.js';
 // 六個維度的唯一事實源（工單 08 §3.2）。routes/insights.js 檔尾已 export，別在這裡複製一份。
 import { DIMENSIONS } from './routes/insights.js';
 
@@ -92,16 +93,85 @@ function resolveDimension(entry, paperId) {
   return fallback;
 }
 
+// ── 【已有洞察】區塊（工單 08 §3.3）──────────────────────────────────
+// 兩個用途：(1) 模型側的第一道去重閘（「不要重複提取語義相同的條目」）；
+// (2)「闪回」「共振」要有別篇論文的材料才判得出來。
+
+const EXISTING_OWN_LIMIT = 30;
+const EXISTING_OTHER_LIMIT = 8;
+const EXISTING_CONTENT_MAX = 120;
+
+// 沒有方向資訊時，「你的研究」「延伸」判不了（定義本身就要靠方向）。
+// 這句是**動態**的：只在「無方向但有洞察」時加——完全空的時候 buildExtractSystem
+// 必須逐字等於 EXTRACT_PROMPT（§5 零回歸線、§6 B1）。
+const NO_DIRECTIONS_NOTE = '【補充】本次沒有她的研究方向資訊：「你的研究」「延伸」這兩個維度不要用，'
+  + '判斷不了就用「概念」或「悬题」。';
+
+function truncateForPrompt(s) {
+  const text = (s || '').replace(/\s+/g, ' ').trim();
+  return text.length > EXISTING_CONTENT_MAX ? `${text.slice(0, EXISTING_CONTENT_MAX)}…` : text;
+}
+
 /**
- * 提取用的 system（工單 07 §3.2 注入點 2）。
- * EXTRACT_PROMPT 在前、研究方向區塊接在後面；沒有任何方向時**逐字等於** EXTRACT_PROMPT
- * （§5 零回歸線）。本工單只加方向，不動 type／dimension 語義（那是批次三）。
+ * 注入用的【已有洞察】區塊；本篇與其他論文都沒有洞察時回 ''（紅線：不得多一個換行）。
+ * @param {string} paperId
+ * @returns {string}
+ */
+export function renderExistingInsightsBlock(paperId) {
+  try {
+    const own = db.prepare(
+      'SELECT dimension, content FROM insights WHERE source_paper_id = ? ORDER BY created_at LIMIT ?'
+    ).all(paperId, EXISTING_OWN_LIMIT);
+
+    const others = findRelatedInsights(paperId, EXISTING_OTHER_LIMIT);
+    if (own.length === 0 && others.length === 0) return '';
+
+    const titleOf = db.prepare('SELECT title FROM papers WHERE id = ?');
+    const lines = ['【已有洞察】'];
+
+    if (own.length > 0) {
+      lines.push('本篇已提取（不要重複提取語義相同的條目）：');
+      for (const row of own) {
+        lines.push(`- [${row.dimension}] ${truncateForPrompt(row.content)}`);
+      }
+    }
+
+    if (others.length > 0) {
+      lines.push('來自其他論文（判斷「闪回」「共振」時引用；每條前面標了論文標題）：');
+      for (const row of others) {
+        const title = row.source_paper_title
+          || (row.source_paper_id ? titleOf.get(row.source_paper_id)?.title : null)
+          || '未知來源';
+        lines.push(`- 《${title}》[${row.dimension}] ${truncateForPrompt(row.content)}`);
+      }
+    }
+
+    return lines.join('\n');
+  } catch (err) {
+    // 同方向區塊的規矩：區塊壞掉絕不能讓提取掛掉——退回「什麼都不注入」。
+    log('ERROR', `[EXTRACT] 已有洞察區塊組裝失敗，這輪不注入: ${err.message}`);
+    return '';
+  }
+}
+
+/**
+ * 提取用的 system。順序固定：EXTRACT_PROMPT → 方向區塊 → 已有洞察區塊（工單 08 §3.3）。
+ *
+ * 零回歸線（工單 07 §5 / 08 §5）：沒有任何方向**且**沒有任何洞察時，**逐字等於** EXTRACT_PROMPT。
+ * 所以「沒有方向資訊」的補句只在「無方向但有洞察」時才加——完全空的時候一個字都不加。
  * @param {string} paperId
  * @returns {string}
  */
 export function buildExtractSystem(paperId) {
   const directions = renderDirectionsBlock(paperId);
-  return directions ? `${EXTRACT_PROMPT}\n\n${directions}` : EXTRACT_PROMPT;
+  const existing = renderExistingInsightsBlock(paperId);
+
+  const parts = [EXTRACT_PROMPT];
+  if (directions) parts.push(directions);
+  else if (existing) parts.push(NO_DIRECTIONS_NOTE);
+  if (existing) parts.push(existing);
+
+  return parts.join('\n\n');
 }
 
 /**
