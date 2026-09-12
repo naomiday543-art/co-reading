@@ -1,0 +1,19 @@
+{
+  "anthropic": [
+    {
+      "type": "text",
+      "text": "CONST-SNAPSHOT",
+      "cache_control": {
+        "type": "ephemeral"
+      }
+    },
+    {
+      "type": "text",
+      "text": "以下是這篇論文的信息：\n標題：Cholesterol alters the protein corona\n作者：Tang et al.\n年份：2023\n\nAI 摘要：\n- 背景：BG-X\n- 方法：M-X\n- 結果：R-X\n- 結論：C-X\n- 局限：L-X\n\n以下是論文全文（供你參考回答問題，不需要重複全文內容）：\nFULLTEXT-SNAPSHOT-MARKER lorem ipsum",
+      "cache_control": {
+        "type": "ephemeral"
+      }
+    }
+  ],
+  "openai": "CONST-SNAPSHOT\n\n以下是這篇論文的信息：\n標題：Cholesterol alters the protein corona\n作者：Tang et al.\n年份：2023\n\nAI 摘要：\n- 背景：BG-X\n- 方法：M-X\n- 結果：R-X\n- 結論：C-X\n- 局限：L-X\n\n以下是論文全文（供你參考回答問題，不需要重複全文內容）：\nFULLTEXT-SNAPSHOT-MARKER lorem ipsum"
+}

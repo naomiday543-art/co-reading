@@ -3,8 +3,9 @@ import db from './db.js';
 import { log } from './logger.js';
 import { getChatConfig } from './ai.js';
 import { syncInsightFireAndForget } from './gateway.js';
+import { renderDirectionsBlock } from './directions.js';
 
-const EXTRACT_PROMPT = `你是一位科研記憶提取助手。
+export const EXTRACT_PROMPT = `你是一位科研記憶提取助手。
 以下是用戶與 AI 科研導師討論一篇學術論文的對話記錄。請從對話中提取可長期保存的結構化記憶條目。
 
 每條記憶必須標明類型（type）並包含一句完整、獨立、可被搜尋的陳述。
@@ -52,6 +53,18 @@ const TYPE_TO_DIMENSION = {
   fact: '概念',
   hypothesis: '悬题',
 };
+
+/**
+ * 提取用的 system（工單 07 §3.2 注入點 2）。
+ * EXTRACT_PROMPT 在前、研究方向區塊接在後面；沒有任何方向時**逐字等於** EXTRACT_PROMPT
+ * （§5 零回歸線）。本工單只加方向，不動 type／dimension 語義（那是批次三）。
+ * @param {string} paperId
+ * @returns {string}
+ */
+export function buildExtractSystem(paperId) {
+  const directions = renderDirectionsBlock(paperId);
+  return directions ? `${EXTRACT_PROMPT}\n\n${directions}` : EXTRACT_PROMPT;
+}
 
 function buildEndpoint(config) {
   const base = config.baseUrl.replace(/\/$/, '');
@@ -176,7 +189,7 @@ export async function extractInsights(paperId) {
 
   const config = getChatConfig();
   const extractMessages = [
-    { role: 'system', content: EXTRACT_PROMPT },
+    { role: 'system', content: buildExtractSystem(paperId) },
     { role: 'user', content: `以下是對話記錄：\n\n${transcript}` },
   ];
 

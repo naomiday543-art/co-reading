@@ -1,4 +1,14 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+
+// 在巢狀樹裡找節點，順便回傳祖先路徑（用來標「方向 / 子分類」）。
+function findNode(nodes, id, path = []) {
+  for (const n of nodes || []) {
+    if (n.id === id) return { node: n, path };
+    const hit = findNode(n.children, id, [...path, n]);
+    if (hit) return hit;
+  }
+  return null;
+}
 import { useStore } from '../store';
 import { papersApi } from '../api';
 
@@ -8,14 +18,41 @@ export default function UploadZone({ onUploaded }) {
   const [progress, setProgress] = useState([]);
   const fileInputRef = useRef(null);
 
+  // 上傳時選方向（工單 07 §3.4）：頂層節點才是方向。
+  // 一個方向都沒有時**不顯示** select，行為與工單 07 之前完全相同。
+  const tree = useStore(s => s.tree);
+  const selectedTreeNode = useStore(s => s.selectedTreeNode);
+  const directions = tree || [];
+  const [directionChoice, setDirectionChoice] = useState('');
+
+  // 預設 = 側欄當前選的節點（不論頂層或子分類），跟工單 07 之前的行為一致；
+  // 子分類不在方向清單裡，就多列一個「方向 / 子分類」選項並預選它，
+  // 這樣她側欄選著子分類上傳，論文還是掛到那個子分類，不會退化成「先不歸類」。
+  const selectedInfo = useMemo(
+    () => (selectedTreeNode && selectedTreeNode !== '__none' ? findNode(tree, selectedTreeNode) : null),
+    [tree, selectedTreeNode]
+  );
+  const subNodeOption = selectedInfo && selectedInfo.path.length > 0
+    ? { id: selectedInfo.node.id, label: [...selectedInfo.path.map(p => p.name), selectedInfo.node.name].join(' / ') }
+    : null;
+  useEffect(() => {
+    setDirectionChoice(selectedInfo ? selectedInfo.node.id : '');
+  }, [selectedInfo]);
+
   const handleFiles = async (files) => {
     if (!files.length) return;
     setUploading(true);
     setProgress(Array.from(files).map(f => ({ name: f.name, status: 'uploading' })));
 
     try {
-      const selectedNode = useStore.getState().selectedTreeNode;
-      const treeNodeId = selectedNode && selectedNode !== '__none' ? selectedNode : undefined;
+      const hasDirections = (useStore.getState().tree || []).length > 0;
+      let treeNodeId;
+      if (hasDirections) {
+        treeNodeId = directionChoice || undefined;
+      } else {
+        const selectedNode = useStore.getState().selectedTreeNode;
+        treeNodeId = selectedNode && selectedNode !== '__none' ? selectedNode : undefined;
+      }
       const results = await papersApi.upload(files, treeNodeId);
 
       // Update progress with results
@@ -62,6 +99,27 @@ export default function UploadZone({ onUploaded }) {
             <p className="text-[13px] text-muted">
               將 PDF 拖拽到此處上傳，或 <span className="text-accent hover:underline">點擊選擇文件</span> · 支援批次匯入
             </p>
+            {directions.length > 0 && (
+              <div
+                className="flex items-center gap-1.5"
+                onClick={e => e.stopPropagation()}
+              >
+                <span className="text-[12.5px] text-faint">這篇屬於：</span>
+                <select
+                  className="text-[12.5px] border border-border rounded-lg bg-surface px-2 py-1 text-text cursor-pointer focus:outline-none focus:border-accent"
+                  value={directionChoice}
+                  onChange={e => setDirectionChoice(e.target.value)}
+                >
+                  <option value="">先不歸類</option>
+                  {directions.map(d => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))}
+                  {subNodeOption && (
+                    <option value={subNodeOption.id}>{subNodeOption.label}（子分類）</option>
+                  )}
+                </select>
+              </div>
+            )}
           </>
         )}
       </div>

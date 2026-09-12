@@ -205,6 +205,14 @@ if (!columnExists('insights', 'synced_at')) {
 db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_insights_external_ombre
   ON insights(external_ombre_id) WHERE external_ombre_id IS NOT NULL`);
 
+// ── Idempotent migration: tree_nodes.description（工單 07 §3.1）──
+// 研究方向 = parent_id IS NULL 的節點；description 是她寫給 AI 看的一段話
+// （這個方向在做什麼、關心什麼問題），注入討論與提取 prompt。
+// NOT NULL DEFAULT '' ⇒ 舊代碼照樣能 INSERT，不需要降級 migration（工單 §8）。
+if (!columnExists('tree_nodes', 'description')) {
+  db.exec(`ALTER TABLE tree_nodes ADD COLUMN description TEXT NOT NULL DEFAULT ''`);
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS message_branches (
     id TEXT PRIMARY KEY,

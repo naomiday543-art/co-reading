@@ -57,7 +57,11 @@ export const tagsApi = {
 
 export const treeApi = {
   get: () => request('/tree'),
-  create: (name, parent_id) => request('/tree', { method: 'POST', body: { name, parent_id } }),
+  // description 可選（工單 07 §3.1）：沒傳就不帶這個 key，後端維持原樣行為。
+  create: (name, parent_id, description) => request('/tree', {
+    method: 'POST',
+    body: description === undefined ? { name, parent_id } : { name, parent_id, description },
+  }),
   update: (id, data) => request(`/tree/${id}`, { method: 'PATCH', body: data }),
   delete: (id) => request(`/tree/${id}`, { method: 'DELETE' }),
 };
