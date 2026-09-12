@@ -54,6 +54,33 @@ describe('loadConstitution', () => {
     assert.equal(source, 'fallback');
     assert.equal(text, FALLBACK_CONSTITUTION);
   });
+
+  // K1（工單 07 §3.3）：第 7 條「不當辯護人」在內建憲章裡，而且 loadConstitution 讀得到。
+  // 她問「作者為什麼選血清」時，導師的任務不該被定義成「去找作者的理由」。
+  it('K1 內建憲章含第 7 條：不當辯護人、分兩層、印象要標明', () => {
+    const { text, source } = loadConstitution({ dataDir: mkdtempSync(join(tmpdir(), 'cr-const-')) });
+    assert.equal(source, 'builtin');
+
+    assert.ok(text.includes('7. **你不是這篇論文的辯護人。**'), '第 7 條不在內建憲章裡');
+    assert.ok(text.includes('先判斷她的質疑成不成立，再說作者的理由'));
+    assert.ok(text.includes('**批判要有據**'));
+    assert.ok(text.includes('只從她的洞察區塊與研究方向區塊引用'));
+    assert.ok(text.includes('這是我的印象，可能過時'));
+    assert.ok(text.includes('先「論文說的」（準確轉述、引出處），後「我的評估」（明確標記）'));
+    assert.ok(text.includes('純理解型的問題'), '純理解題不加評估段的例外要留著');
+
+    // 身份段要認得方向區塊（§3.3）
+    assert.ok(text.includes('洞察、研究方向、上一段研究續窗'));
+
+    // 1–6 條措辭不得被動（紅線）
+    assert.ok(text.includes('1. **記性比人好，但永遠可以被拒絕。**'));
+    assert.ok(text.includes('2. **保留矛盾，而不是消除矛盾。**'));
+    assert.ok(text.includes('3. **事實靠查，不靠編。**'));
+    assert.ok(text.includes('4. **引用要具體。**'));
+    assert.ok(text.includes('5. **講清楚，不講深奧。**'));
+    assert.ok(text.includes('6. **不評分、不催促、不製造焦慮。**'));
+    assert.ok(!text.includes('8. **'), '本工單只加第 7 條');
+  });
 });
 
 describe('buildChatSystem', () => {

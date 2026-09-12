@@ -387,6 +387,8 @@ Messages:
 [歷史對話 + 當前 user message]
 ```
 
+> 導師人格與批判規則（含「不是這篇論文的辯護人」、回答分兩層）以 `src/prompts/CONSTITUTION.md` 為準；上面那五條回答要求是歷史文檔，不是事實源。
+
 溫度 0.3，max_tokens 4096，stream: true。
 
 ---
