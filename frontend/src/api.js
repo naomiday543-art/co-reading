@@ -142,3 +142,26 @@ export function continueChat(paperId, { onDelta, onDone, onError }) {
 export const activityApi = {
   get: (days = 365) => request(`/activity?days=${days}`),
 };
+
+// 多篇摘要對比（工單 09）。掛在 /api/compare，不在 /api/papers 底下。
+// 通常 30–60 秒，呼叫端要自己顯示 loading。
+//
+// 不走上面的 request()：它把錯誤壓成 `new Error(err.error)`，400 帶回來的
+// `not_analyzed`（哪幾篇還沒通讀）會整個掉光——而那正是前端要印給她看的東西。
+export const compareApi = {
+  run: async (paper_ids) => {
+    const res = await fetch(`${API}/api/compare`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paper_ids }),
+    });
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    if (!res.ok) {
+      const err = new Error(body.error || res.statusText);
+      err.status = res.status;
+      if (body.not_analyzed) err.notAnalyzed = body.not_analyzed;
+      throw err;
+    }
+    return body;
+  },
+};

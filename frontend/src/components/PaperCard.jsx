@@ -8,9 +8,14 @@ const statusStyles = {
   done: { label: '已讀', dot: 'var(--fact)', cls: 'bg-fact-soft text-fact' },
 };
 
-export default function PaperCard({ paper, onClick, onRefresh }) {
+// 對比勾選（工單 09 §3.3）只在呼叫端傳了 onToggleSelect 時才出現——沒傳的用法
+// （未來其他頁面）長相與行為完全照舊。整卡點擊開論文的行為零回歸：checkbox 自己
+// stopPropagation，不讓事件冒泡到外層的 onClick。
+export default function PaperCard({ paper, onClick, onRefresh, selected = false, onToggleSelect }) {
   const st = statusStyles[paper.status] || statusStyles.unread;
   const analyzing = paper.analyze_status === 'analyzing';
+  // 沒通讀完就沒有五段摘要，對比無料可吃。
+  const comparable = paper.analyze_status === 'done';
   const hasSummary = paper.summary_bg || paper.summary_conclusions;
   const snippet = paper.summary_conclusions
     ? paper.summary_conclusions.slice(0, 120) + '…'
@@ -34,13 +39,30 @@ export default function PaperCard({ paper, onClick, onRefresh }) {
           </p>
         </div>
 
-        {/* Status pill */}
-        <div className={`shrink-0 flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full text-[11.5px] font-medium whitespace-nowrap ${st.cls}`}>
-          <span
-            className={`w-1.5 h-1.5 rounded-full inline-block ${analyzing || paper.status === 'reading' ? 'cr-pulse-dot' : ''}`}
-            style={{ backgroundColor: st.dot }}
-          />
-          {st.label}
+        <div className="shrink-0 flex items-center gap-2.5">
+          {/* Status pill */}
+          <div className={`flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full text-[11.5px] font-medium whitespace-nowrap ${st.cls}`}>
+            <span
+              className={`w-1.5 h-1.5 rounded-full inline-block ${analyzing || paper.status === 'reading' ? 'cr-pulse-dot' : ''}`}
+              style={{ backgroundColor: st.dot }}
+            />
+            {st.label}
+          </div>
+
+          {/* 對比勾選（工單 09 §3.3）*/}
+          {onToggleSelect && (
+            <input
+              type="checkbox"
+              className="w-4 h-4 accent-[var(--accent)] cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+              checked={selected}
+              disabled={!comparable}
+              title={comparable ? '選入對比' : '先通讀才能對比'}
+              aria-label={comparable ? `選入對比：${paper.title || paper.pdf_filename || '未命名論文'}` : '先通讀才能對比'}
+              data-testid="compare-checkbox"
+              onClick={e => e.stopPropagation()}
+              onChange={e => { e.stopPropagation(); onToggleSelect(paper.id); }}
+            />
+          )}
         </div>
       </div>
 

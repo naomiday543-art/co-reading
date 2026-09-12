@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useStore } from '../store';
+import { useStore, COMPARE_MIN, COMPARE_MAX } from '../store';
 import { papersApi } from '../api';
 import PaperCard from '../components/PaperCard';
 import ActivityPanel from '../components/ActivityPanel';
@@ -21,6 +21,7 @@ export default function Library({ onNavigate, onRefresh }) {
     papers, selectedTreeNode, selectedTag,
     searchQuery, sortBy, tree,
     setSearchQuery, setSortBy, setPapers,
+    compareSelection, toggleCompare, clearCompare,
   } = useStore();
 
   const [loading, setLoading] = useState(false);
@@ -151,8 +152,45 @@ export default function Library({ onNavigate, onRefresh }) {
               paper={paper}
               onClick={(id) => onNavigate('detail', id)}
               onRefresh={loadPapers}
+              selected={compareSelection.includes(paper.id)}
+              onToggleSelect={toggleCompare}
             />
           ))}
+        </div>
+      )}
+
+      {/* 對比工具條（工單 09 §3.3）——勾了至少一篇才出現，在 UploadZone 之上。
+          沒勾的時候整條不存在：Library 的原有行為零回歸（§5 紅線）。*/}
+      {compareSelection.length > 0 && (
+        <div
+          className="sticky bottom-0 z-20 mt-4 px-4 py-3 rounded-xl border border-border bg-bg-tint shadow-md"
+          data-testid="compare-bar"
+        >
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-[13.5px] text-text">
+              已選 <strong className="text-text-strong">{compareSelection.length}</strong> 篇
+              {compareSelection.length >= COMPARE_MAX && (
+                <span className="text-faint"> · 最多 {COMPARE_MAX} 篇</span>
+              )}
+            </span>
+            <div className="flex-1" />
+            <button
+              className="px-3.5 py-1.5 bg-accent text-accent-fg rounded-[10px] text-[13px] font-medium hover:bg-accent-hover shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+              disabled={compareSelection.length < COMPARE_MIN}
+              title={compareSelection.length < COMPARE_MIN ? `至少選 ${COMPARE_MIN} 篇` : '對比這幾篇的摘要'}
+              data-testid="compare-go"
+              onClick={() => onNavigate('compare')}
+            >
+              對比
+            </button>
+            <button
+              className="px-3 py-1.5 border border-border rounded-[10px] text-[13px] text-muted hover:text-text-strong hover:bg-surface-hover"
+              onClick={clearCompare}
+              data-testid="compare-clear"
+            >
+              清除
+            </button>
+          </div>
         </div>
       )}
     </div>
