@@ -119,4 +119,42 @@
 
 ## 附錄：實作偏離記錄
 
-（實作者填寫）
+> 2026-09-12 實作完成，分支 `feat/paper-compare`（從 `main` @ `9c6a5ab` 切）。
+> `npm test` 170 → **204 全綠**；`git diff --check` 無輸出；未 push、未合 main。
+> **完整驗收報告在最後一個 commit 的 message 裡**（harness 不讓 subagent 寫
+> `docs/work/report-*.md`），`git log -1` 就看得到。
+
+### 開工前的環境事故（不是本工單造成的）
+
+共用的 `node_modules/better-sqlite3` 裡是一顆 **Windows PE DLL**（`npm run dist:win`
+的 `electron-rebuild` 留下的），`npm test` 與 `npm start` 在主 checkout 裡都會
+`ERR_DLOPEN_FAILED`。我沒動她的 `node_modules`，只在 worktree 自己的
+`node_modules/`（gitignored）放了一顆同版本 11.10.0 的 darwin-arm64 影子套件。
+她要修：`npm rebuild better-sqlite3`（代價是 `npm run electron` 要再
+`npm run electron:rebuild` 換回去；兩個 ABI 共存不了）。
+
+### 偏離
+
+1. **`ai.js` 零改動**——§4 說「只准新增 export」，實際一顆都不用加，工單 08 已全數
+   export。
+2. **`paper_id` 對照表放在輸出格式段**，不塞進論文標題行：`table` 的 key 要是
+   `paper_id`，模型得知道對照關係；§3.1 的 `## 論文 N：《標題》（作者，年份）`
+   維持原樣（測試逐字斷言）。
+3. **`compareApi` 不走共用 `request()`**：那顆 helper 會把 400 的 `not_analyzed`
+   壓掉，而那正是要印給她看的。共用 `request()` 一個字沒改。
+4. **三段分析全空時 `content` 退回對比表**：否則空 `content` 會撞
+   `POST /api/insights` 的「內容不能為空」400。
+5. **多了第 5 個 commit**（`fix(compare): 手機直排`）：§3.3 同時要
+   `overflow-x:auto` 與「手機直排」，第一版只做到前半，375px 實彈才補上。
+   純 Tailwind 響應式 class，沒動 `frontend/index.html`（不在 §4 清單裡）。
+6. **自驗沒用 vite dev server**：`npm run build` 的 `dist/` 會被 `src/server.js`
+   當靜態檔服務，直開 `127.0.0.1:3457` 就是同一份代碼，
+   **完全沒碰 `vite.config.js`**，也沒碰 3456／5173／5174。
+7. **多測了幾條**：V1 空陣列／缺欄、V3 的 `error` 狀態、H1b（scope 固定不隨論文變）、
+   S3b（正常收尾時從 reasoning 搶救）、S5（上游 HTTP 429 → 502）、`compareKey`、
+   `buildCompareInsight` 的 30 字截斷。
+
+### 真上游還沒打
+
+無生產權限、不花她額度。§2 挑好的首發組合（膽固醇蛋白冠 × Nanoplastic shape）
+留給她合併後親手打。
