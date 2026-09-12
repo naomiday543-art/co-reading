@@ -7,6 +7,7 @@ import { renderVisualPages } from './pdf.js';
 import { renderCarryoverForInjection } from './carryover.js';
 import { opencodeSessionHeaders } from './opencodeSession.js';
 import { loadConstitution } from './constitution.js';
+import { buildDirectionsContext, renderDirectionsBlock } from './directions.js';
 
 function resolveConfig(prefix) {
   const dbSettings = getSettings();
@@ -528,8 +529,16 @@ ${fullText}`;
 
 // system 的穩定前綴 = 憲章（單獨一個 cache block，永遠最前）+ 論文區塊（第二個 cache block）。
 // 換論文不打掉憲章緩存；改憲章只冷一次。變動區（洞察/續窗）由呼叫端接在後面。
-export function buildChatSystem(paper, { constitution, format }) {
-  const paperBlock = buildPaperBlock(paper);
+//
+// 研究方向區塊（工單 07 §3.2 注入點 1）接在論文區塊之後、**同一個 cache block 內**，
+// 不另開 cache_control：方向很少變，冷一次可接受。沒有任何方向時區塊是空字串，
+// 這裡連換行都不加 ⇒ 輸出與工單 07 之前逐字相同（§5 零回歸線）。
+// directionsBlock 可由呼叫端傳入（討論線已經為了 log 查過一次，不用再查）。
+export function buildChatSystem(paper, { constitution, format, directionsBlock }) {
+  const directions = directionsBlock === undefined ? renderDirectionsBlock(paper.id) : directionsBlock;
+  const paperBlock = directions
+    ? `${buildPaperBlock(paper)}\n\n${directions}`
+    : buildPaperBlock(paper);
   if (format === 'anthropic') {
     return [
       { type: 'text', text: constitution, cache_control: { type: 'ephemeral' } },
@@ -542,7 +551,16 @@ export function buildChatSystem(paper, { constitution, format }) {
 export async function chatAboutPaper(paper, history, userMessage, onChunk) {
   const config = getChatConfig();
   const { text: constitution, source: constitutionSource } = loadConstitution();
-  const stableSystem = buildChatSystem(paper, { constitution, format: config.format });
+
+  // 方向區塊查一次：一份給 system，一份給 log（工單 07 §3.2——討論用的要看得見）。
+  const directions = buildDirectionsContext(paper.id);
+  log('INFO', `[DIRECTIONS] paper=${paper.id} direction=${directions.directionName || 'none'} total=${directions.total}`);
+
+  const stableSystem = buildChatSystem(paper, {
+    constitution,
+    format: config.format,
+    directionsBlock: directions.block,
+  });
 
   // Variable part: injected insights — changes per-turn, not cached
   let insightText = '';
