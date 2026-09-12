@@ -117,4 +117,78 @@
 
 ## 附錄：實作偏離記錄
 
-（實作者填寫）
+> 實作於 2026-09-11，分支 `feat/reading-mode`，base `main` @ `a601efa`。
+> 三個 commit：`5c79468`（store+App）→ `8a2590c`（PaperDetail 抽屜）→ `a755288`（ChatPanel 字級）。
+> `npm test` 84/84；`git diff --check` 乾淨；`git diff main --name-only` 只含 §4 允許的五個檔案。
+> R1–Z1 十三案全過。完整報告在 commit `docs(work): 工單 06 附錄` 的 message 裡
+> （harness 擋掉了 `docs/work/report-06-*.md` 的寫入，照交接約定改落 commit message）。
+
+### ① 閱讀模式開關放頂列**左**邊（「返回列表」右邊），不是右側
+
+§3.1 只說「頂列加一顆按鈕」。先放右側（刪除鍵旁）實測**被抽屜蓋住**——抽屜 `top` 貼 header
+下緣（§3.1 指定），會蓋掉頂列右半邊：按鈕 `left:1025`、抽屜左緣 `1020`，`elementFromPoint`
+命中抽屜。抽屜一開就離不開閱讀模式了。改放左邊後 `left:97`，命中按鈕本身。
+
+### ② `leftTab` 初值跟著 `readingMode`
+
+§3.1 只寫「進入時」自動切 fulltext。`leftTab` 是純本地 state，**閱讀模式下刷新**會回到
+「AI 摘要」全寬，跟「閱讀模式就是看 PDF」矛盾。改成
+`useState(() => useStore.getState().readingMode ? 'fulltext' : 'summary')`。
+非閱讀模式初值不變（Z1 已驗仍是 AI 摘要）。
+
+### ③ 🔴 `text-sm` 是 **12.25px** 不是 14px——§3.2「預設 sm ＝現況」這句不成立
+
+`index.html` 是 `html { font-size: 14px }`，所以 **1rem = 14px**，Tailwind 的 `text-sm`
+（`0.875rem/1.25rem`）實際是 **12.25px / 17.5px**（`p-6` 同理是 21px 不是 24px）。
+照工單做完之後聊天氣泡與輸入框是 **14px / 21px**——**是變大，不是持平**，輸入框高 55 → 62。
+
+方向跟她原話「讨论的部分…现在有点太小了」一致，所以照工單的 14/16/18 做了，沒有自作主張
+把 sm 調成 12.25px 去湊「零回歸」。但這是刻意的視覺改變，驗收時要知道。
+若要讓預設維持原樣：改 `store.js` 的 `CHAT_FONT_PX.sm` 一個值即可。
+
+`line-height` 沒另設（照工單）。順帶更正 §3.2 的說明：全站實際行高是 **1.5** 不是 1.7——
+Tailwind preflight 的 `html{line-height:1.5}` 排在 `index.html` 的 `<style>` 之後，
+而 `body{line-height:inherit}`。量到 21px = 1.5 × 14。
+
+### ④ 要拿掉的 `text-sm` 是**五處**不是四處
+
+§2 列了 L259/L277/L433/L462，**漏了真正的訊息氣泡**（原 L315
+`group p-3 text-sm max-w-[85%]`）。不拿掉它，CSS 變數只作用在歡迎語與串流氣泡，
+真正的對話內容不會變大，這條需求等於白做。編輯中的 textarea（原 L280）也一併處理並加
+`.cr-chat-input`，否則 18px 氣泡裡包一個 12.25px 編輯框。
+
+### ⑤ Aa 按鈕的容器提出條件式
+
+§3.2 說放「L501 那個工具區」，但那個 `<div className="flex items-center gap-2">` 整個包在
+`{messages.length >= 2 && …}` 裡——放進去的話**新上傳、還沒聊過的論文找不到字級開關**。
+容器提出條件，提取洞察按鈕保留原本的 `messages.length >= 2`，行為不變。
+
+### ⑥ `onMessagesUpdated` 多帶一個參數
+
+浮鈕未讀小點需要訊息條數，`onMessagesUpdated?.()` → `onMessagesUpdated?.(msgs.length)`。
+向後相容，唯一呼叫端是 PaperDetail，不影響 ChatPanel 既有行為。
+
+### ⑦ `--cr-drawer-top` 是量出來的，不是寫死
+
+§3.1 寫 `top:<header 高>`。`PaperDetail` 進入閱讀模式時量一次 `header` 實際高度寫進 `:root`
+並掛 `resize`；CSS 端 `top: var(--cr-drawer-top, 50px)`。實測 header = 50px。
+
+### ⑧ R3 用本地 stub 串流驗，沒有真的呼叫 AI
+
+§6 R3 寫「抽屜內送一句」。真送會寫進 `data/co-reading.db` 的 `messages` 表，違反
+「零寫入、別動 data/」，且每輪帶全文成本不小。改成在瀏覽器把 `window.fetch` 針對
+`POST …/chat` 換成可逐段餵的**真 SSE ReadableStream**——ChatPanel 與 `api.js` 的
+`readSSEStream` 走完全相同的代碼路徑，只差字節從哪來，驗完立刻還原。
+
+實測：串流中關抽屜 → 關著時餵的兩段不掉 → 重開後三段齊全 → 全程 **POST 只有 1 筆** →
+ChatPanel 根 DOM 節點物件前後恆等（沒被 unmount）。
+驗完 `data/co-reading.db` mtime 未變、`-wal` 0 bytes，確認零寫入。
+順帶驗了未讀小點：抽屜關著收到回覆時浮鈕出現小點，打開後消失。
+
+### 驗證環境的坑（給下一個人）
+
+Browser pane 的 `document.visibilityState` 恆為 `hidden`：(a) CSS transition 時間軸凍在 0，
+抽屜永遠量到「開著」——量之前要先 `document.getAnimations().forEach(a => a.finish())`
+（跳過 `iterations === Infinity` 的，否則丟 InvalidStateError）；
+(b) 鏈式 `setTimeout` 被 Chrome intensive throttling 壓到一分鐘一次，腳本會超時——
+等 React flush 改用 MessageChannel（實測 8 次 tick ≈ 1ms）。兩者都是測試環境假象，不是產品 bug。

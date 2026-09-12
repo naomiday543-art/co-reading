@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { streamChat, regenerateChat, continueChat, papersApi } from '../api';
+import { useStore, CHAT_FONT_PX, CHAT_FONT_LABELS, nextChatFontSize } from '../store';
 import CarryoverPanel from './CarryoverPanel';
 
 export function switchVersion(messages, messageId, direction) {
@@ -64,7 +65,8 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
     try {
       const msgs = await papersApi.getMessages(paperId);
       setMessages(msgs);
-      onMessagesUpdated?.();
+      // 帶上條數，讓閱讀模式的浮鈕知道抽屜收著時有沒有來新回覆
+      onMessagesUpdated?.(msgs.length);
     } catch {}
   };
 
@@ -231,6 +233,9 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
     }
   };
 
+  // 聊天字級三檔（工單 06 §3.2）：走 CSS 變數，所以抽屜裡跟分欄裡是同一份
+  const { chatFontSize, setChatFontSize } = useStore();
+
   const hasSummary = paper?.summary_conclusions || paper?.summary_bg;
 
   // Find last AI message for regenerate button
@@ -243,7 +248,7 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full" style={{ '--chat-fs': CHAT_FONT_PX[chatFontSize] }}>
       <h3 className="cr-serif text-sm font-semibold text-text-strong mb-2 flex items-center gap-2">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="text-accent"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
         討論
@@ -256,7 +261,7 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
       <div className="flex-1 overflow-y-auto space-y-3 mb-3 min-h-0">
         {/* Welcome message */}
         {messages.length === 0 && hasSummary && (
-          <div className="chat-bubble-ai p-3 text-sm">
+          <div className="chat-bubble-ai p-3">
             我已經讀完了這篇論文。{paper.title || '這篇論文'} 主要研究了{' '}
             {(paper.summary_conclusions || paper.summary_bg || '').slice(0, 50)}
             ... 有什麼想討論的嗎？
@@ -274,10 +279,10 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
             return (
               <div
                 key={msg.id}
-                className="chat-bubble-user p-3 text-sm max-w-[85%] ml-auto"
+                className="chat-bubble-user p-3 max-w-[85%] ml-auto"
               >
                 <textarea
-                  className="w-full min-h-[60px] max-h-[200px] border border-border bg-surface rounded-lg p-2 text-sm resize-y focus:outline-none focus:border-accent"
+                  className="cr-chat-input w-full min-h-[60px] max-h-[200px] border border-border bg-surface rounded-lg p-2 resize-y focus:outline-none focus:border-accent"
                   value={editContent}
                   onChange={e => setEditContent(e.target.value)}
                   onKeyDown={e => {
@@ -312,7 +317,7 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
           return (
             <div
               key={msg.id}
-              className={`group p-3 text-sm max-w-[85%] ${isUser
+              className={`group p-3 max-w-[85%] ${isUser
                 ? 'chat-bubble-user ml-auto'
                 : 'chat-bubble-ai'
               }`}
@@ -430,7 +435,7 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
 
         {/* Streaming */}
         {streaming && (
-          <div className="chat-bubble-ai p-3 text-sm max-w-[85%]">
+          <div className="chat-bubble-ai p-3 max-w-[85%]">
             {streamingContent ? (
               <div className="prose-chat">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -461,7 +466,7 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
         <div className="flex gap-2">
           <textarea
             ref={inputRef}
-            className="flex-1 border border-border bg-surface rounded-2xl px-4 py-2.5 text-sm resize-none shadow-sm focus:outline-none focus:border-accent"
+            className="cr-chat-input flex-1 border border-border bg-surface rounded-2xl px-4 py-2.5 resize-none shadow-sm focus:outline-none focus:border-accent"
             rows={2}
             placeholder="追問，或貼上一段原文一起讀…（Enter 送出，Shift+Enter 換行）"
             value={input}
@@ -496,25 +501,35 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
           貼上原文提問
         </button>
 
-        {/* Extract insights button */}
-        {messages.length >= 2 && (
-          <div className="flex items-center gap-2">
-            <button
-              className="text-xs text-muted hover:text-accent flex items-center gap-1 px-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={handleExtract}
-              disabled={extracting}
-              title="從討論中自動提取洞察"
-            >
-              {extracting ? '… 提取中...' : '提取洞察'}
-            </button>
-            {extractResult && (
-              <span className="text-xs text-fact">
-                新增 {extractResult.insights.length} 條洞察
-                {extractResult.skipped > 0 && `（${extractResult.skipped} 條進度已跳過）`}
-              </span>
-            )}
-          </div>
-        )}
+        {/* 工具列：字級開關永遠在，提取洞察照舊要有兩條訊息才出現 */}
+        <div className="flex items-center gap-2">
+          <button
+            className="cr-chat-font-btn text-xs text-muted hover:text-accent flex items-center gap-1 px-1 transition-colors"
+            onClick={() => setChatFontSize(nextChatFontSize(chatFontSize))}
+            title={`聊天字級：${CHAT_FONT_LABELS[chatFontSize]}（${CHAT_FONT_PX[chatFontSize]}）— 點一下換下一檔`}
+          >
+            <span className="cr-serif text-[13px] leading-none">Aa</span>
+            {CHAT_FONT_LABELS[chatFontSize]}
+          </button>
+          {messages.length >= 2 && (
+            <>
+              <button
+                className="text-xs text-muted hover:text-accent flex items-center gap-1 px-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={handleExtract}
+                disabled={extracting}
+                title="從討論中自動提取洞察"
+              >
+                {extracting ? '… 提取中...' : '提取洞察'}
+              </button>
+              {extractResult && (
+                <span className="text-xs text-fact">
+                  新增 {extractResult.insights.length} 條洞察
+                  {extractResult.skipped > 0 && `（${extractResult.skipped} 條進度已跳過）`}
+                </span>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
