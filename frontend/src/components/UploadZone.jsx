@@ -1,4 +1,14 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+
+// 在巢狀樹裡找節點，順便回傳祖先路徑（用來標「方向 / 子分類」）。
+function findNode(nodes, id, path = []) {
+  for (const n of nodes || []) {
+    if (n.id === id) return { node: n, path };
+    const hit = findNode(n.children, id, [...path, n]);
+    if (hit) return hit;
+  }
+  return null;
+}
 import { useStore } from '../store';
 import { papersApi } from '../api';
 
@@ -15,11 +25,19 @@ export default function UploadZone({ onUploaded }) {
   const directions = tree || [];
   const [directionChoice, setDirectionChoice] = useState('');
 
-  // 預設 = 側欄當前選的節點，若它是頂層節點；否則「先不歸類」。
+  // 預設 = 側欄當前選的節點（不論頂層或子分類），跟工單 07 之前的行為一致；
+  // 子分類不在方向清單裡，就多列一個「方向 / 子分類」選項並預選它，
+  // 這樣她側欄選著子分類上傳，論文還是掛到那個子分類，不會退化成「先不歸類」。
+  const selectedInfo = useMemo(
+    () => (selectedTreeNode && selectedTreeNode !== '__none' ? findNode(tree, selectedTreeNode) : null),
+    [tree, selectedTreeNode]
+  );
+  const subNodeOption = selectedInfo && selectedInfo.path.length > 0
+    ? { id: selectedInfo.node.id, label: [...selectedInfo.path.map(p => p.name), selectedInfo.node.name].join(' / ') }
+    : null;
   useEffect(() => {
-    const isDirection = directions.some(d => d.id === selectedTreeNode);
-    setDirectionChoice(isDirection ? selectedTreeNode : '');
-  }, [selectedTreeNode, tree]);
+    setDirectionChoice(selectedInfo ? selectedInfo.node.id : '');
+  }, [selectedInfo]);
 
   const handleFiles = async (files) => {
     if (!files.length) return;
@@ -96,6 +114,9 @@ export default function UploadZone({ onUploaded }) {
                   {directions.map(d => (
                     <option key={d.id} value={d.id}>{d.name}</option>
                   ))}
+                  {subNodeOption && (
+                    <option value={subNodeOption.id}>{subNodeOption.label}（子分類）</option>
+                  )}
                 </select>
               </div>
             )}
