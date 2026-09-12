@@ -159,8 +159,8 @@ export default function Compare({ onNavigate }) {
       {/* 結果 */}
       {!loading && !error && cached && (
         <>
-          {/* 維度 × 論文 對比表 */}
-          <div className="card mb-5 overflow-x-auto" data-testid="compare-table-wrap">
+          {/* 維度 × 論文 對比表（≥768px）。手機另有直排版，見下面那塊。 */}
+          <div className="hidden md:block card mb-5 overflow-x-auto" data-testid="compare-table-wrap">
             <table className="w-full text-[13px]" data-testid="compare-table">
               <thead>
                 <tr className="border-b border-border-soft">
@@ -199,6 +199,28 @@ export default function Compare({ onNavigate }) {
                 ))}
               </tbody>
             </table>
+          </div>
+
+          {/* 手機直排（<768px）：一個維度一張卡，卡內每篇一行。
+              窄螢幕硬塞四欄表格就是左右拉到死，直排才讀得完（工單 §3.3）。*/}
+          <div className="md:hidden space-y-3 mb-5" data-testid="compare-stacked">
+            {DIMENSIONS.map(d => (
+              <div key={d} className="card p-4">
+                <div className="cr-serif font-semibold text-[15px] text-text-strong mb-2.5">{d}</div>
+                <div className="space-y-2.5">
+                  {cached.papers.map((p, i) => (
+                    <div key={p.id}>
+                      <div className="cr-mono text-[10.5px] text-faint">
+                        論文 {i + 1} · {p.title || '未命名論文'}
+                      </div>
+                      <div className="text-[13px] text-text leading-relaxed whitespace-pre-wrap break-words">
+                        {cached.table?.[d]?.[p.id] || '摘要未提及'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
 
           {/* 三段分析 */}
