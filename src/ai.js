@@ -315,7 +315,9 @@ export async function* streamOpenAI(response) {
   }
 }
 
-function responseText(config, data) {
+// 提取線（memory.js）也要從同一份 wire format 規則裡挖正文——工單 08 §3.1 把那邊的
+// 私有傳輸層刪掉接回這裡，所以這顆從檔案私有升為 export。函式體一字未動。
+export function responseText(config, data) {
   if (config.format === 'anthropic') {
     return data.content?.filter(part => part.type === 'text').map(part => part.text || '').join('').trim() || '';
   }

@@ -1,7 +1,16 @@
 import { nanoid } from 'nanoid';
 import db from './db.js';
 import { log } from './logger.js';
-import { getChatConfig } from './ai.js';
+import {
+  getChatConfig,
+  buildEndpoint,
+  buildHeaders,
+  buildBody,
+  collectStream,
+  completionMeta,
+  responseText,
+  REQUEST_TIMEOUT_MS,
+} from './ai.js';
 import { syncInsightFireAndForget } from './gateway.js';
 import { renderDirectionsBlock } from './directions.js';
 
@@ -66,78 +75,85 @@ export function buildExtractSystem(paperId) {
   return directions ? `${EXTRACT_PROMPT}\n\n${directions}` : EXTRACT_PROMPT;
 }
 
-function buildEndpoint(config) {
-  const base = config.baseUrl.replace(/\/$/, '');
-  if (config.format === 'anthropic') {
-    return `${base}/messages`;
-  }
-  return `${base}/chat/completions`;
+/**
+ * 提取的輸出預算。
+ *
+ * 2026-09-09 通讀事故的同一顆坑：推理模型的思考鏈與正文共用同一個 completion 預算，
+ * 舊的 `max_tokens: 2000` 在 deepseek-v4-pro 這類模型上會被思考鏈吃光、正文留空字串。
+ * 提取的輸出比摘要短（幾條 JSON），4000 是「正文夠用 + 給思考鏈留位」。
+ */
+export const EXTRACT_MAX_TOKENS = Number(process.env.EXTRACT_MAX_TOKENS) || 4000;
+
+/**
+ * 空正文的診斷字串。措辭與 ai.js 的 diagnoseCompletion 同形，只是把「調高」指向提取的旋鈕。
+ */
+function diagnoseExtract(meta, content) {
+  const bits = [`finish_reason=${meta.finishReason ?? '未提供'}`, `content=${content.length} 字`];
+  if (meta.reasoning) bits.push(`reasoning_content=${meta.reasoning.length} 字`);
+  if (meta.toolCalls.length) bits.push(`tool_calls=${meta.toolCalls.length}`);
+  if (meta.usage) bits.push(`usage=${JSON.stringify(meta.usage)}`);
+  if (meta.truncated) bits.push('輸出預算用盡（調高 EXTRACT_MAX_TOKENS）');
+  return bits.join('，');
 }
 
-function buildHeaders(config) {
-  if (config.format === 'anthropic') {
-    return {
-      'Content-Type': 'application/json',
-      'x-api-key': config.key,
-      'anthropic-version': '2023-06-01',
-    };
-  }
-  return {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${config.key}`,
-  };
-}
+/**
+ * 從一次 completion 裡挖出「可能含 JSON 的那段文字」。規則與 analyze 的
+ * extractAnalyzeJson 完全一致：正文沒有 `{…}` 且模型**正常收尾**時才從 reasoning 搶救；
+ * 被截斷（finish_reason=length / max_tokens）的思考鏈裡躺的是寫壞一半的草稿 JSON，不救。
+ * @param {{format?: string}} config
+ * @param {object} data 串流重組出的非串流形狀
+ * @returns {string}
+ */
+function extractCompletionSource(config, data) {
+  const content = responseText(config, data);
+  const meta = completionMeta(config, data);
+  const diag = diagnoseExtract(meta, content);
 
-function buildBody(config, messages) {
-  if (config.format === 'anthropic') {
-    const chatMessages = [];
-    let system = null;
-    for (const m of messages) {
-      if (m.role === 'system') {
-        system = m.content;
-      } else {
-        chatMessages.push({ role: m.role, content: m.content });
-      }
-    }
-    const body = {
-      model: config.model,
-      max_tokens: 2000,
-      temperature: 0.1,
-      messages: chatMessages,
-    };
-    if (system) body.system = system;
-    return body;
+  let source = content;
+  if (!/\{[\s\S]*\}/.test(source) && meta.reasoning && !meta.truncated) {
+    log('WARN', `記憶提取：正文沒有 JSON，改從 reasoning_content 搶救（${diag}）`);
+    source = meta.reasoning;
   }
-  return {
-    model: config.model,
-    max_tokens: 2000,
-    temperature: 0.1,
-    messages,
-  };
+
+  if (!/\{[\s\S]*\}/.test(source)) {
+    throw new Error(`AI 沒有返回可解析的提取結果（${diag}）: ${content.slice(0, 200)}`);
+  }
+  return source;
 }
 
 async function callExtractAPI(config, messages) {
   const url = buildEndpoint(config);
-  const headers = buildHeaders(config);
-  const body = buildBody(config, messages);
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(60000),
+  // 紅線：scope 固定 'extract'（提取 prompt 的前綴與論文無關，不按論文分桶）。
+  // baseUrl 一定要傳進去，buildHeaders 才判得出是不是 opencode.ai（缺標頭 → 400 MissingSessionID）。
+  const headers = buildHeaders({ ...config, scope: 'extract' });
+  const body = buildBody(config, {
+    messages,
+    stream: true, // 躲 OpenCode Go 的 60 秒非串流閘門（與 analyze 同一道修法）
+    max_tokens: EXTRACT_MAX_TOKENS,
+    temperature: 0.1,
   });
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+      throw new Error(`記憶提取請求超時（${Math.round(REQUEST_TIMEOUT_MS / 1000)}s 沒有結果）`);
+    }
+    throw err;
+  }
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`Extract API error ${res.status}: ${text.slice(0, 200)}`);
   }
 
-  const data = await res.json();
-  if (config.format === 'anthropic') {
-    return data.content?.map(b => b.text || '').join('').trim() || '';
-  }
-  return data.choices?.[0]?.message?.content || '';
+  return extractCompletionSource(config, await collectStream(config, res));
 }
 
 function parseExtractResponse(raw) {
