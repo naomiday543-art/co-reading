@@ -1,6 +1,6 @@
 {
   "name": "co-reading",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "AI 論文共讀系統 — 上傳 PDF、AI 通讀、討論論文、自動提取洞察",
   "license": "MIT",
   "type": "module",
@@ -29,11 +29,16 @@
     "mac": {
       "category": "public.app-category.education",
       "icon": "build/icon.icns",
-      "target": ["dmg", "zip"]
+      "target": [
+        "dmg",
+        "zip"
+      ]
     },
     "win": {
       "icon": "build/icon.ico",
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     },
     "asarUnpack": [
       "node_modules/better-sqlite3/**"
