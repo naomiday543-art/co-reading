@@ -13,22 +13,34 @@ import {
 } from './ai.js';
 import { syncInsightFireAndForget } from './gateway.js';
 import { renderDirectionsBlock } from './directions.js';
+// 六個維度的唯一事實源（工單 08 §3.2）。routes/insights.js 檔尾已 export，別在這裡複製一份。
+import { DIMENSIONS } from './routes/insights.js';
 
 export const EXTRACT_PROMPT = `你是一位科研記憶提取助手。
 以下是用戶與 AI 科研導師討論一篇學術論文的對話記錄。請從對話中提取可長期保存的結構化記憶條目。
 
-每條記憶必須標明類型（type）並包含一句完整、獨立、可被搜尋的陳述。
+每條記憶必須標明類型（type）與維度（dimension），並包含一句完整、獨立、可被搜尋的陳述。
 
 ### 記憶類型
 
 **fact** — 學到的事實（文獻結論、方法、數據、機制、臨床證據）
-  例: {"type":"fact","content":"SGLT2 抑制劑阻斷近端腎小管 SGLT2 轉運體，減少葡萄糖重吸收"}
+  例: {"type":"fact","dimension":"概念","content":"SGLT2 抑制劑阻斷近端腎小管 SGLT2 轉運體，減少葡萄糖重吸收"}
 
 **hypothesis** — 用戶提出的待驗證假設、推測、或懸而未決的問題
-  例: {"type":"hypothesis","content":"SGLT2 腎臟保護可能不依賴降糖作用（推測，未驗證）"}
+  例: {"type":"hypothesis","dimension":"悬题","content":"SGLT2 腎臟保護可能不依賴降糖作用（推測，未驗證）"}
 
 **progress** — 用戶明確陳述的研究進度、下一步計劃、讀了什麼、做到哪了
-  例: {"type":"progress","content":"已讀完 DAPA-CKD 和 EMPA-REG 兩篇關鍵試驗，下一步整理 SGLT2 腎保護機制綜述"}
+  例: {"type":"progress","dimension":"你的研究","content":"已讀完 DAPA-CKD 和 EMPA-REG 兩篇關鍵試驗，下一步整理 SGLT2 腎保護機制綜述"}
+
+### 維度（dimension）——每條必填，六選一
+
+**概念** — 從這篇論文學到的事實、機制、方法（type 通常是 fact）
+**悬题** — 沒解決的疑問、推測、待驗證的假設（type 通常是 hypothesis）
+**你的研究** — 直接關於她自己所屬方向的判斷或計畫（見【她的研究方向】：跟這篇所屬方向直接相關）
+**延伸** — 從這篇跳到她**另一個**方向的連結（見【她的研究方向】：不是這篇所屬的那個）
+**闪回** — 讀這篇時想起**另一篇**論文的具體內容（見【已有洞察】裡來自其他論文的條目）
+**共振** — 這篇與**另一篇**論文的說法互相呼應或打架（見【已有洞察】；打架也算，保留矛盾）
+判斷不了就用「概念」或「悬题」，不要硬湊跨論文維度。
 
 ### 規則
 
@@ -41,6 +53,7 @@ export const EXTRACT_PROMPT = `你是一位科研記憶提取助手。
 - progress 必須包含具體的進度標記（讀到哪、做到哪、下一步是什麼）
 - 若無可提取的條目，輸出 { "entries": [] }（寧可空也不要硬湊）
 - 如果用戶只是簡單提問而沒有表達自己的觀點或進展，不要提取
+- 每條都要填 dimension（六選一，見上）；拿不定主意就填「概念」或「悬题」
 
 ### 輸出格式
 
@@ -48,20 +61,36 @@ export const EXTRACT_PROMPT = `你是一位科研記憶提取助手。
 
 {
   "entries": [
-    {"type": "fact", "content": "..."},
-    {"type": "hypothesis", "content": "..."},
-    {"type": "progress", "content": "..."}
+    {"type": "fact", "dimension": "概念", "content": "..."},
+    {"type": "hypothesis", "dimension": "悬题", "content": "..."},
+    {"type": "progress", "dimension": "你的研究", "content": "..."}
   ]
 }`;
 
-// Dimension mapping per 架構審查修正 3:
-//   fact → 概念
-//   hypothesis → 悬题 (default) or 你的研究 (if about user's own project)
-//   progress → NOT written to insights (logged, then skipped)
+// 工單 08 §3.2 起，dimension 由模型直出（六值）；這張表退為**兜底**：
+//   模型沒填或填了六值以外的東西時才用 —— fact → 概念、hypothesis → 悬题。
+//   progress 一律不入 insights（log 後跳過），與 gateway 契約的三 type 無關。
 const TYPE_TO_DIMENSION = {
   fact: '概念',
   hypothesis: '悬题',
 };
+
+/**
+ * 模型直出的 dimension 收口：六值照用，其餘一律兜底並留 WARN（工單 08 §3.2）。
+ * @param {{type: string, dimension: string}} entry
+ * @param {string} paperId
+ * @returns {string}
+ */
+function resolveDimension(entry, paperId) {
+  if (DIMENSIONS.includes(entry.dimension)) return entry.dimension;
+  const fallback = TYPE_TO_DIMENSION[entry.type] || '概念';
+  log(
+    'WARN',
+    `記憶提取: ${paperId} → 非法維度 ${JSON.stringify(entry.dimension || '')}`
+    + `（type=${entry.type}）→ 兜底 [${fallback}]`,
+  );
+  return fallback;
+}
 
 /**
  * 提取用的 system（工單 07 §3.2 注入點 2）。
@@ -171,6 +200,8 @@ function parseExtractResponse(raw) {
       if (typeof e === 'object' && e.content) {
         return {
           type: e.type || 'fact',
+          // 模型直出的 dimension；收口與兜底在 resolveDimension（這裡不過濾，壞值要留著進 WARN）
+          dimension: typeof e.dimension === 'string' ? e.dimension.trim() : '',
           content: (e.content || '').trim(),
         };
       }
@@ -232,7 +263,7 @@ export async function extractInsights(paperId) {
       continue;
     }
 
-    const dimension = TYPE_TO_DIMENSION[entry.type] || '概念';
+    const dimension = resolveDimension(entry, paperId);
     const id = nanoid();
 
     // Find source context: a snippet of the discussion containing keywords

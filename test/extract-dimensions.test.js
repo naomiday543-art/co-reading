@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { nanoid } from 'nanoid';
 
 import db, { setSetting } from '../src/db.js';
-import { extractInsights, EXTRACT_MAX_TOKENS } from '../src/memory.js';
+import { extractInsights, EXTRACT_MAX_TOKENS, EXTRACT_PROMPT } from '../src/memory.js';
 
 // ── mock 上游 ───────────────────────────────────────────────────────
 
@@ -253,5 +253,111 @@ describe('S 串流重組與空正文診斷', () => {
 
     await assert.rejects(() => extractInsights(paperId), /輸出預算用盡/);
     clearAll();
+  });
+});
+
+// ── P：六維度直出與解析 ─────────────────────────────────────────────
+
+describe('P 六維度直出', () => {
+  before(installFetch);
+  after(() => { restoreFetch(); clearAll(); });
+  beforeEach(() => { captured.length = 0; nextResponse = null; useBase('https://api.openai.com/v1'); });
+
+  it('P1 六種 dimension 各一條 → 各自照模型說的入庫', async () => {
+    const paperId = addPaper();
+    addMessages(paperId);
+    const entries = [
+      { type: 'fact', dimension: '概念', content: '膽固醇會改變奈米粒子表面蛋白冠的組成' },
+      { type: 'hypothesis', dimension: '悬题', content: '靜態血清是否代表循環環境，尚未有人驗證' },
+      { type: 'fact', dimension: '你的研究', content: '她的奈米塑膠方向可以直接沿用這套蛋白冠定量流程' },
+      { type: 'fact', dimension: '延伸', content: '這套方法搬到 py-GCMS 那個方向可以拿來做前處理回收率' },
+      { type: 'fact', dimension: '闪回', content: '想起 Tang 2023 那篇用的是人血清而不是小鼠血清' },
+      { type: 'hypothesis', dimension: '共振', content: '與另一篇說蛋白冠穩定的結論互相打架，矛盾先保留' },
+    ];
+    nextResponse = () => openaiStream([JSON.stringify({ entries })]);
+
+    const result = await extractInsights(paperId);
+
+    assert.equal(result.insights.length, 6);
+    assert.deepEqual(
+      result.insights.map(i => i.dimension),
+      ['概念', '悬题', '你的研究', '延伸', '闪回', '共振'],
+    );
+    const rows = db.prepare('SELECT dimension FROM insights WHERE source_paper_id = ?')
+      .all(paperId).map(r => r.dimension);
+    assert.equal(rows.length, 6);
+    assert.deepEqual(new Set(rows), new Set(['概念', '悬题', '你的研究', '延伸', '闪回', '共振']));
+    clearAll();
+  });
+
+  it('P2 非法維度 → 依 type 兜底成「悬题」並留 WARN', async () => {
+    const paperId = addPaper();
+    addMessages(paperId);
+    nextResponse = () => openaiStream([JSON.stringify({
+      entries: [{ type: 'hypothesis', dimension: 'foo', content: '蛋白冠的動態交換速率可能決定生物分佈，待驗證' }],
+    })]);
+
+    const originalLog = console.log;
+    const lines = [];
+    console.log = (...args) => { lines.push(args.join(' ')); };
+    let result;
+    try {
+      result = await extractInsights(paperId);
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(result.insights.length, 1);
+    assert.equal(result.insights[0].dimension, '悬题');
+    const warn = lines.find(l => l.includes('非法維度'));
+    assert.ok(warn, lines.join('\n'));
+    assert.match(warn, /\[WARN\]/);
+    assert.match(warn, /"foo"/);
+    assert.match(warn, /兜底 \[悬题\]/);
+    clearAll();
+  });
+
+  it('P2b 缺 dimension 欄位 → fact 兜底成「概念」', async () => {
+    const paperId = addPaper();
+    addMessages(paperId);
+    nextResponse = () => openaiStream([JSON.stringify({
+      entries: [{ type: 'fact', content: '蛋白冠組成決定奈米粒子被哪一類細胞吞掉' }],
+    })]);
+
+    const result = await extractInsights(paperId);
+
+    assert.equal(result.insights.length, 1);
+    assert.equal(result.insights[0].dimension, '概念');
+    clearAll();
+  });
+
+  it('P3 progress 不入庫、skipped + 1', async () => {
+    const paperId = addPaper();
+    addMessages(paperId);
+    nextResponse = () => openaiStream([JSON.stringify({
+      entries: [
+        { type: 'progress', dimension: '你的研究', content: '已讀完這篇，下一步整理蛋白冠定量的方法表' },
+        { type: 'fact', dimension: '概念', content: '血清濃度會改變蛋白冠的厚度' },
+      ],
+    })]);
+
+    const result = await extractInsights(paperId);
+
+    assert.equal(result.insights.length, 1);
+    assert.equal(result.skipped, 1);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM insights WHERE source_paper_id = ?').get(paperId).n, 1);
+    clearAll();
+  });
+
+  it('P4 prompt 本體：六個維度與輸出格式都帶 dimension', () => {
+    for (const d of ['概念', '延伸', '你的研究', '闪回', '共振', '悬题']) {
+      assert.ok(EXTRACT_PROMPT.includes(`**${d}**`), d);
+    }
+    assert.ok(EXTRACT_PROMPT.includes('### 維度（dimension）——每條必填，六選一'));
+    assert.ok(EXTRACT_PROMPT.includes('{"type": "fact", "dimension": "概念", "content": "..."}'));
+    // gateway 契約的三 type 不得消失
+    for (const t of ['**fact**', '**hypothesis**', '**progress**']) {
+      assert.ok(EXTRACT_PROMPT.includes(t), t);
+    }
   });
 });
