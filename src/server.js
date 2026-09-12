@@ -10,6 +10,7 @@ import tagsRouter from './routes/tags.js';
 import treeRouter from './routes/tree.js';
 import insightsRouter from './routes/insights.js';
 import activityRouter from './routes/activity.js';
+import compareRouter from './routes/compare.js';
 import { getSetting, setSetting, getSettings } from './db.js';
 import { dataPaths } from './paths.js';
 
@@ -29,6 +30,8 @@ app.use('/api', tagsRouter);
 app.use('/api', treeRouter);
 app.use('/api', insightsRouter);
 app.use('/api', activityRouter);
+// 對比掛 /api（不是 /api/papers——那裡的 /:id 會把 /compare 吃掉）。工單 09 §3.1。
+app.use('/api', compareRouter);
 
 // Settings endpoints
 app.get('/api/settings', (_req, res) => {
