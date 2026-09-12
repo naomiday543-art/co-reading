@@ -26,6 +26,64 @@ export function compareKey(ids) {
   return [...ids].sort().join(',');
 }
 
+// ── 對比結果存成「共振」洞察（工單 09 §3.2）────────────────────────
+// 六維度裡的「共振」本來就是「兩篇互相呼應或打架」的位置，一直沒有入口——對比
+// 結果正好是它的料。走既有的 POST /api/insights，不繞過它的驗證（§5 紅線）。
+const COMPARE_TITLE_MAX = 30;
+
+const ANALYSIS_PREFIX = [
+  ['same', '相同'],
+  ['differ', '相異'],
+  ['conflict', '打架'],
+];
+
+function shortTitle(title) {
+  const s = (title || '').trim() || '未命名論文';
+  return s.length > COMPARE_TITLE_MAX ? `${s.slice(0, COMPARE_TITLE_MAX)}…` : s;
+}
+
+/**
+ * 把 /api/compare 的結果組成 POST /api/insights 的 body。純函式，好單測。
+ * @param {{papers: object[], table: object, analysis: object}} result
+ * @returns {{dimension: string, title: string, content: string, source_paper_id: string, source_context: string, tags: string[]}}
+ */
+export function buildCompareInsight(result) {
+  const papers = result?.papers || [];
+  const analysis = result?.analysis || {};
+  const table = result?.table || {};
+
+  const title = `對比：${papers.map(p => `《${shortTitle(p.title)}》`).join(' × ')}`;
+
+  const lines = [];
+  for (const [key, prefix] of ANALYSIS_PREFIX) {
+    for (const item of analysis[key] || []) lines.push(`${prefix}：${item}`);
+  }
+  if (analysis.for_her) lines.push(analysis.for_her);
+
+  // source_context：對比表壓成純文字——每維度一段、每篇一行。
+  const contextParts = [];
+  for (const [dimension, cells] of Object.entries(table)) {
+    const block = [`【${dimension}】`];
+    for (const paper of papers) {
+      block.push(`${shortTitle(paper.title)}：${cells?.[paper.id] || '摘要未提及'}`);
+    }
+    contextParts.push(block.join('\n'));
+  }
+
+  const context = contextParts.join('\n\n');
+
+  return {
+    dimension: '共振',
+    title,
+    // 三段分析全空（模型什麼都沒比出來）時退回對比表本身：POST /api/insights 的
+    // 「內容不能為空」是硬驗證，空 content 會讓存洞察直接 400。
+    content: lines.length > 0 ? lines.join('\n') : context,
+    source_paper_id: papers[0]?.id || null,
+    source_context: context,
+    tags: ['compare', ...papers.map(p => `paper:${p.id}`)],
+  };
+}
+
 function loadReadingMode() {
   try {
     return localStorage.getItem(READING_MODE_KEY) === '1';

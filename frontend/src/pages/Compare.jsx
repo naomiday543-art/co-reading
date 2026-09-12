@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useStore, COMPARE_MIN, compareKey } from '../store';
-import { compareApi } from '../api';
+import { useStore, COMPARE_MIN, compareKey, buildCompareInsight } from '../store';
+import { compareApi, insightsApi } from '../api';
 
 // 表格的列順序＝摘要的五段，與後端 src/compare.js 的 COMPARE_DIMENSIONS 同一組。
 const DIMENSIONS = ['背景', '方法', '結果', '結論', '局限'];
@@ -17,6 +17,8 @@ export default function Compare({ onNavigate }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [notAnalyzed, setNotAnalyzed] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   const key = useMemo(() => compareKey(compareSelection), [compareSelection]);
   // 同一組 ids 的結果在 store 記一份：返回 Library 再進來不重打，換了選擇才重打（§3.3）。
@@ -32,6 +34,7 @@ export default function Compare({ onNavigate }) {
     setLoading(true);
     setError(null);
     setNotAnalyzed(null);
+    setSaved(false);
     try {
       const data = await compareApi.run(compareSelection);
       setCompareResult({ key, data });
@@ -46,6 +49,19 @@ export default function Compare({ onNavigate }) {
 
   // 進頁即對比（已經有同一組的結果就直接用）。
   useEffect(() => { run(); }, [key]);
+
+  // 存成「共振」洞察（§3.2）：走既有的 POST /api/insights，不繞過它的驗證。
+  const saveInsight = async () => {
+    if (!cached || saving || saved) return;
+    setSaving(true);
+    try {
+      await insightsApi.create(buildCompareInsight(cached));
+      setSaved(true);
+    } catch (err) {
+      setError(err.message || '存洞察失敗');
+    }
+    setSaving(false);
+  };
 
   const back = () => onNavigate('library');
 
@@ -218,6 +234,23 @@ export default function Compare({ onNavigate }) {
 
           {/* 底部動作 */}
           <div className="flex items-center gap-2.5 flex-wrap pb-2">
+            <button
+              className="px-3.5 py-1.5 bg-accent text-accent-fg rounded-[10px] text-[13px] font-medium hover:bg-accent-hover shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+              disabled={saving || saved}
+              onClick={saveInsight}
+              data-testid="compare-save"
+            >
+              {saving ? '存入中…' : saved ? '已存為共振洞察' : '存成共振洞察'}
+            </button>
+            {saved && (
+              <button
+                className="text-[13px] text-accent underline hover:text-accent-hover"
+                onClick={() => onNavigate('insights')}
+                data-testid="compare-goto-insights"
+              >
+                去洞察頁看
+              </button>
+            )}
             <div className="flex-1" />
             <button
               className="px-3 py-1.5 border border-border rounded-[10px] text-[13px] text-muted hover:text-text-strong hover:bg-surface-hover"
