@@ -218,18 +218,145 @@ async function makeRequest(config, params) {
 }
 
 /**
- * SSE 行 → 已解析的 JSON 事件。兩種 wire format 共用。
+ * 串流「中途停滯」與「總逾時」共用的錯誤形狀。
+ *
+ * 2026-09-13 事故：通讀在 300.0s 整失敗，訊息是原生 DOMException 的
+ * `The operation was aborted due to timeout`，直接被 SummaryView 印給使用者看。
+ * 原因是 `AbortSignal.timeout` 在**讀 body** 的階段觸發時，拋錯的是 `sseEvents()`
+ * 裡的 `reader.read()`，不在 `makeRequest` 那圈 try/catch 的範圍內——那圈只蓋得到
+ * 「等標頭」。同一篇論文她手按重試 22s 就過，所以不是論文長、不是預算、不是 prompt，
+ * 是第一發的連線在串流途中停滯。
+ *
+ * 兩顆逾時疊著用：總逾時（300s，絕不無限）＋閒置逾時（60s，兩個 chunk 之間的最長間隔）。
+ * 兩者都翻成這個形狀，錯誤訊息一律繁體、且帶「等了多久／收到多少」方便下次查。
  */
-async function* sseEvents(response) {
+export class StreamInterruptedError extends Error {
+  constructor(message, { kind, receivedChunks = 0, receivedChars = 0, elapsedMs = 0 } = {}) {
+    super(message);
+    this.name = 'StreamInterruptedError';
+    this.kind = kind;
+    this.receivedChunks = receivedChunks;
+    this.receivedChars = receivedChars;
+    this.elapsedMs = elapsedMs;
+  }
+}
+
+/** 兩個 chunk 之間等太久（上游掛住／網路抖）。 */
+export class StreamIdleError extends StreamInterruptedError {
+  constructor(idleTimeoutMs, stats) {
+    super(
+      `上游串流中途停滯：${formatSeconds(idleTimeoutMs)}s 沒有新資料`
+      + `（已收到 ${formatCount(stats.receivedChars)} 字、${formatCount(stats.receivedChunks)} 個片段，`
+      + `共等 ${formatSeconds(stats.elapsedMs)}s）`,
+      { ...stats, kind: 'idle' },
+    );
+    this.name = 'StreamIdleError';
+    this.idleTimeoutMs = idleTimeoutMs;
+  }
+}
+
+/** 總逾時在讀 body 的階段打到（就是 9/13 那發漏出英文的位置）。 */
+export class StreamTimeoutError extends StreamInterruptedError {
+  constructor(totalTimeoutMs, stats) {
+    super(
+      `AI 請求超時：${formatSeconds(totalTimeoutMs)}s 內沒有完成`
+      + `（已收到 ${formatCount(stats.receivedChars)} 字）`,
+      { ...stats, kind: 'timeout' },
+    );
+    this.name = 'StreamTimeoutError';
+    this.totalTimeoutMs = totalTimeoutMs;
+  }
+}
+
+function formatSeconds(ms) {
+  const seconds = ms / 1000;
+  // 測試用的毫秒級逾時不能顯示成「0s 沒有新資料」，那句話會看不懂。
+  return seconds >= 1 ? `${Math.round(seconds)}` : seconds.toFixed(1);
+}
+
+function formatCount(n) {
+  return Number(n || 0).toLocaleString('en-US');
+}
+
+/**
+ * 一次 `reader.read()`，配一顆每次重新計時的閒置計時器。
+ *
+ * `Promise.race` 對兩邊都掛了 handler，所以計時器贏了之後那顆還在跑的 read()
+ * 之後若自己 reject，也不會變成 unhandled rejection。
+ */
+function readWithIdleTimeout(reader, idleTimeoutMs) {
+  let timer;
+  const idle = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(IDLE_SIGNAL), idleTimeoutMs);
+  });
+  return Promise.race([reader.read(), idle]).finally(() => clearTimeout(timer));
+}
+
+const IDLE_SIGNAL = Symbol('sse-idle-timeout');
+
+/**
+ * SSE 行 → 已解析的 JSON 事件。兩種 wire format 共用。
+ *
+ * @param {object} response
+ * @param {object} [options]
+ * @param {number} [options.idleTimeoutMs] >0 時啟用閒置逾時（兩個 chunk 之間的最長間隔）
+ * @param {number} [options.totalTimeoutMs] >0 時把讀 body 階段的原生 TimeoutError/AbortError
+ *   翻成 StreamTimeoutError（帶這個秒數）
+ * @param {{receivedChunks?: number, receivedChars?: number, elapsedMs?: number}} [options.stats]
+ *   可選的統計回填容器，給日誌用
+ *
+ * **不傳 options 時走的是與改動前逐字相同的路徑**（沒有計時器、沒有錯誤翻譯）——
+ * 聊天線的 streamOpenAI／streamAnthropic 就靠這個保持行為不變。
+ */
+async function* sseEvents(response, { idleTimeoutMs = 0, totalTimeoutMs = 0, stats } = {}) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
 
+  const startedAt = Date.now();
+  let receivedChunks = 0;
+  let receivedChars = 0;
+  const guarded = idleTimeoutMs > 0 || totalTimeoutMs > 0;
+  const snapshot = () => ({
+    receivedChunks,
+    receivedChars,
+    elapsedMs: Date.now() - startedAt,
+  });
+  const publish = () => {
+    if (stats) Object.assign(stats, snapshot());
+  };
+
   while (true) {
-    const { done, value } = await reader.read();
+    let chunk;
+    if (!guarded) {
+      chunk = await reader.read();
+    } else {
+      try {
+        chunk = idleTimeoutMs > 0
+          ? await readWithIdleTimeout(reader, idleTimeoutMs)
+          : await reader.read();
+      } catch (err) {
+        publish();
+        if (err === IDLE_SIGNAL) {
+          try { await reader.cancel?.(); } catch {}
+          throw new StreamIdleError(idleTimeoutMs, snapshot());
+        }
+        if (totalTimeoutMs > 0 && (err?.name === 'TimeoutError' || err?.name === 'AbortError')) {
+          throw new StreamTimeoutError(totalTimeoutMs, snapshot());
+        }
+        throw err;
+      }
+    }
+
+    const { done, value } = chunk;
     if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
+    receivedChunks += 1;
+    const text = decoder.decode(value, { stream: true });
+    receivedChars += text.length;
+    publish();
+
+    buffer += text;
     const lines = buffer.split('\n');
     buffer = lines.pop() || '';
 
@@ -254,16 +381,18 @@ async function* sseEvents(response) {
  * 為什麼通讀要走串流：OpenCode Go 的**非串流**請求 60 秒必斷，而實測同一篇論文
  * 在 max_tokens=2000（完成 1,968 tokens）時就已經要 38.9 秒——把預算拉到 8000
  * 之後非串流鐵定撞牆。串流的首字節很早到，之後一路有資料流，躲開那道 60 秒閘。
+ * @param {object} [streamOptions] 透傳給 sseEvents（idleTimeoutMs／totalTimeoutMs／stats）。
+ *   不傳＝與改動前完全相同的路徑。
  * @returns {object} 非串流形狀的回應物件
  */
-export async function collectStream(config, response) {
+export async function collectStream(config, response, streamOptions) {
   let content = '';
   let reasoning = '';
   let finishReason = null;
   let usage = null;
 
   if (config.format === 'anthropic') {
-    for await (const event of sseEvents(response)) {
+    for await (const event of sseEvents(response, streamOptions)) {
       if (event.type === 'content_block_delta') {
         if (event.delta?.text) content += event.delta.text;
         if (event.delta?.thinking) reasoning += event.delta.thinking;
@@ -284,7 +413,7 @@ export async function collectStream(config, response) {
     };
   }
 
-  for await (const event of sseEvents(response)) {
+  for await (const event of sseEvents(response, streamOptions)) {
     const choice = event.choices?.[0];
     if (choice?.delta?.content) content += choice.delta.content;
     if (choice?.delta?.reasoning_content) reasoning += choice.delta.reasoning_content;
@@ -337,6 +466,127 @@ export function responseText(config, data) {
  * 完整重放數據見 commit cea1c15 的訊息（分支 fix/analyze-opencode）。
  */
 export const ANALYZE_MAX_TOKENS = Number(process.env.ANALYZE_MAX_TOKENS) || 8000;
+
+/** `setTimeout` 的 runtime 天花板；超過這個值計時器會立刻觸發（= 等於沒有逾時）。 */
+export const MAX_TIMER_MS = 2_147_483_647;
+
+function clampNumber(raw, { min, max, fallback }) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+/**
+ * 通讀串流的閒置逾時：兩個 chunk 之間最長可以隔多久。
+ *
+ * 預設 60s——推理模型思考時 `reasoning_content` 一樣逐 chunk 送，正常情況不會 60 秒
+ * 一個字都沒有（9/9 實測整篇 38.9–53s 跑完）。總逾時 300s 保留，兩顆疊著用。
+ * 每次呼叫都重讀 env：改 env 重啟即生效，也讓測試不必重新 import 模組。
+ * 空／非數字 → 預設；0 或超大值 → clamp 到 [5s, setTimeout 天花板]。
+ */
+export function resolveAnalyzeIdleTimeoutMs() {
+  const raw = process.env.ANALYZE_IDLE_TIMEOUT_MS;
+  if (raw === undefined || raw === null || `${raw}`.trim() === '') return 60_000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 60_000;
+  return clampNumber(n, { min: 5_000, max: MAX_TIMER_MS, fallback: 60_000 });
+}
+
+/**
+ * 連線類失敗自動重試幾次。預設 1——她不該需要知道「第一發停滯、手按一下就好」這件事。
+ * clamp 到 [0, 3]：重試等於最壞情況多燒一次 ANALYZE_MAX_TOKENS 的輸出預算，不能讓人填 99。
+ */
+export function resolveAnalyzeRetries() {
+  const raw = process.env.ANALYZE_RETRIES;
+  if (raw === undefined || raw === null || `${raw}`.trim() === '') return 1;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 1;
+  return clampNumber(n, { min: 0, max: 3, fallback: 1 });
+}
+
+/** 兩次嘗試之間的固定間隔。只重試一次，沒必要做指數退避。 */
+export const ANALYZE_RETRY_DELAY_MS = 2_000;
+
+function httpStatusOf(message) {
+  const m = /^API error (\d{3})\b/.exec(message || '');
+  return m ? Number(m[1]) : null;
+}
+
+function isConnectionFailure(err) {
+  const code = `${err?.code || ''} ${err?.cause?.code || ''}`;
+  if (/ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|UND_ERR_/.test(code)) return true;
+  return /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|network error|terminated/i
+    .test(`${err?.message || ''}`);
+}
+
+/**
+ * 把一次通讀失敗歸成一類，給日誌與「該不該重試」共用。
+ * @returns {'idle'|'timeout'|'conn'|'output'|`http${number}`|'other'}
+ */
+export function analyzeErrorKind(err) {
+  if (err instanceof StreamInterruptedError) return err.kind;
+  const message = `${err?.message || ''}`;
+  // 模型輸出的問題（空正文／預算用盡／JSON 壞掉）重打大概率同樣結果，還多燒一次預算。
+  if (/摘要格式不正確|摘要無法解析為 JSON|輸出預算用盡/.test(message)) return 'output';
+  if (/AI 請求超時/.test(message)) return 'timeout';
+  const status = httpStatusOf(message);
+  if (status) return `http${status}`;
+  if (isConnectionFailure(err)) return 'conn';
+  return 'other';
+}
+
+/**
+ * 只對「連線／停滯類」重試。
+ *
+ * 4xx 是設定錯（base URL／key／模型名），重打只會再錯一次並多花錢；
+ * 「格式不正確」「輸出預算用盡」是模型輸出問題，同樣不該重打。
+ */
+export function isRetryableAnalyzeError(err) {
+  const kind = analyzeErrorKind(err);
+  if (kind === 'idle' || kind === 'timeout' || kind === 'conn') return true;
+  const status = kind.startsWith('http') ? Number(kind.slice(4)) : null;
+  return status !== null && [429, 502, 503, 504].includes(status);
+}
+
+/**
+ * 錯誤 → 給她看的那一句（繁體、帶「等了多久、收到多少」）。
+ * 既有的「格式不正確」「輸出預算用盡」「上次通讀被服務重啟打斷」保留原文。
+ */
+export function describeAnalyzeError(err) {
+  const message = `${err?.message || '未知錯誤'}`;
+  const kind = analyzeErrorKind(err);
+  if (kind === 'idle' || kind === 'timeout') return message; // 這兩句本來就是人話
+  if (kind === 'conn') {
+    const code = err?.cause?.code || err?.code;
+    const detail = `${message}${code ? ` / ${code}` : ''}`.slice(0, 80);
+    return `連不上通讀模型（${detail}）——請檢查網路或 VPN`;
+  }
+  if (kind.startsWith('http')) {
+    const status = Number(kind.slice(4));
+    const detail = message.replace(/^API error \d{3}: ?/, '').slice(0, 80);
+    const tail = status >= 500 || status === 429
+      ? '請稍後再試'
+      : '請檢查通讀模型設定（base URL／API key／模型名）';
+    return `上游回了 HTTP ${status}${detail ? `（${detail}）` : ''}——${tail}`;
+  }
+  return message;
+}
+
+function finalAnalyzeError(err, retriesUsed) {
+  const human = describeAnalyzeError(err);
+  if (retriesUsed > 0) {
+    const wrapped = new Error(`通讀失敗（已自動重試 ${retriesUsed} 次）：${human}。請稍後按「重新通讀」`);
+    wrapped.cause = err;
+    return wrapped;
+  }
+  // 沒重試過而且訊息本來就是人話時，原物件原樣往上丟（型別資訊對呼叫端有用）。
+  if (human === `${err?.message || ''}`) return err;
+  const wrapped = new Error(human);
+  wrapped.cause = err;
+  return wrapped;
+}
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
  * 把兩種 wire format 的「這次生成怎麼收尾的」抽成同一個形狀，給診斷訊息用。
@@ -460,8 +710,23 @@ async function buildAnalyzeUserContent(config, fullText, pdfPath) {
   return text;
 }
 
-export async function analyzePaper(fullText, { pdfPath } = {}) {
+/**
+ * @param {string} fullText
+ * @param {object} [options]
+ * @param {string} [options.pdfPath]
+ * @param {number} [options.idleTimeoutMs] 覆蓋閒置逾時（預設讀 ANALYZE_IDLE_TIMEOUT_MS）
+ * @param {number} [options.timeoutMs] 覆蓋單次請求的總逾時（預設 REQUEST_TIMEOUT_MS）
+ */
+export async function analyzePaper(fullText, {
+  pdfPath, paperId, idleTimeoutMs, timeoutMs, retries, retryDelayMs,
+} = {}) {
   const config = getAnalyzeConfig();
+  const idleMs = idleTimeoutMs ?? resolveAnalyzeIdleTimeoutMs();
+  const totalMs = timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const maxRetries = retries ?? resolveAnalyzeRetries();
+  const delayMs = retryDelayMs ?? ANALYZE_RETRY_DELAY_MS;
+  const tag = paperId || 'unknown';
+  // 視覺筆記只做一次：它自己也要打一次上游，不該跟著主請求重試燒兩遍。
   const userContent = await buildAnalyzeUserContent(config, fullText, pdfPath);
 
   const messages = [
@@ -484,27 +749,69 @@ export async function analyzePaper(fullText, { pdfPath } = {}) {
     { role: 'user', content: userContent },
   ];
 
-  // 串流，不是為了逐字顯示（通讀沒有逐字 UI），是為了躲 OpenCode Go 的 60 秒非串流閘門：
-  // 實測 max_tokens=2000 就要 38.9 秒，預算拉到 8000 之後非串流必撞牆。
-  const response = await makeRequest({ ...config, scope: 'analyze' }, {
-    messages,
-    max_tokens: ANALYZE_MAX_TOKENS,
-    temperature: 0.2,
-    stream: true,
-  });
+  let lastError = null;
+  let retriesUsed = 0;
 
-  const result = extractAnalyzeJson(config, await collectStream(config, response));
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt += 1) {
+    const startedAt = Date.now();
+    const streamStats = {};
+    log('INFO', `[ANALYZE] attempt=${attempt} paper=${tag} model=${config.model} chars_in=${fullText.length}`);
 
-  return {
-    title: result.title || '',
-    authors: result.authors || '',
-    year: result.year || null,
-    summary_bg: result.background || '',
-    summary_methods: result.methods || '',
-    summary_results: result.results || '',
-    summary_conclusions: result.conclusions || '',
-    summary_limitations: result.limitations || '',
-  };
+    try {
+      // 串流，不是為了逐字顯示（通讀沒有逐字 UI），是為了躲 OpenCode Go 的 60 秒非串流閘門：
+      // 實測 max_tokens=2000 就要 38.9 秒，預算拉到 8000 之後非串流必撞牆。
+      const response = await makeRequest({ ...config, scope: 'analyze' }, {
+        messages,
+        max_tokens: ANALYZE_MAX_TOKENS,
+        temperature: 0.2,
+        stream: true,
+        timeoutMs: totalMs,
+      });
+
+      // 通讀沒有逐字 UI，沒人會看著它停住——停滯要由程式自己發現，不能傻等滿 300s。
+      const collected = await collectStream(config, response, {
+        idleTimeoutMs: idleMs,
+        totalTimeoutMs: totalMs,
+        stats: streamStats,
+      });
+      const result = extractAnalyzeJson(config, collected);
+      const meta = completionMeta(config, collected);
+
+      log('INFO', `[ANALYZE] attempt=${attempt} ok elapsed=${elapsedSeconds(startedAt)}s`
+        + ` chunks=${streamStats.receivedChunks ?? 0}`
+        + ` chars_out=${responseText(config, collected).length}`
+        + ` finish=${meta.finishReason ?? '未提供'}`
+        + ` usage=${meta.usage ? JSON.stringify(meta.usage) : 'none'}`);
+
+      return {
+        title: result.title || '',
+        authors: result.authors || '',
+        year: result.year || null,
+        summary_bg: result.background || '',
+        summary_methods: result.methods || '',
+        summary_results: result.results || '',
+        summary_conclusions: result.conclusions || '',
+        summary_limitations: result.limitations || '',
+      };
+    } catch (err) {
+      lastError = err;
+      const kind = analyzeErrorKind(err);
+      log('WARN', `[ANALYZE] attempt=${attempt} fail elapsed=${elapsedSeconds(startedAt)}s kind=${kind}`
+        + ` chunks=${streamStats.receivedChunks ?? 0} chars_out=${streamStats.receivedChars ?? 0}`);
+
+      if (attempt > maxRetries || !isRetryableAnalyzeError(err)) break;
+
+      retriesUsed = attempt;
+      log('INFO', `[ANALYZE] retry ${attempt}/${maxRetries} paper=${tag} reason=${kind}`);
+      await sleep(delayMs);
+    }
+  }
+
+  throw finalAnalyzeError(lastError, retriesUsed);
+}
+
+function elapsedSeconds(startedAt) {
+  return ((Date.now() - startedAt) / 1000).toFixed(1);
 }
 
 // 論文區塊：標題/作者/年份/AI 摘要/全文。措辭逐字沿用工單 05 之前的 stableSystem，只是拿掉了身份句。

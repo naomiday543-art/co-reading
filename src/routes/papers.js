@@ -107,6 +107,8 @@ async function triggerAnalyze(paperId) {
       : null;
     const summary = await analyzePaper(paper.full_text, {
       pdfPath: pdfPath && existsSync(pdfPath) ? pdfPath : undefined,
+      // 只是讓 [ANALYZE] 日誌指得出是哪一篇（觀察哨：grep '\[ANALYZE\]' data/app.log）。
+      paperId,
     });
 
     db.prepare(`UPDATE papers SET
