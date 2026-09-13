@@ -493,6 +493,102 @@ export function resolveAnalyzeIdleTimeoutMs() {
 }
 
 /**
+ * 連線類失敗自動重試幾次。預設 1——她不該需要知道「第一發停滯、手按一下就好」這件事。
+ * clamp 到 [0, 3]：重試等於最壞情況多燒一次 ANALYZE_MAX_TOKENS 的輸出預算，不能讓人填 99。
+ */
+export function resolveAnalyzeRetries() {
+  const raw = process.env.ANALYZE_RETRIES;
+  if (raw === undefined || raw === null || `${raw}`.trim() === '') return 1;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 1;
+  return clampNumber(n, { min: 0, max: 3, fallback: 1 });
+}
+
+/** 兩次嘗試之間的固定間隔。只重試一次，沒必要做指數退避。 */
+export const ANALYZE_RETRY_DELAY_MS = 2_000;
+
+function httpStatusOf(message) {
+  const m = /^API error (\d{3})\b/.exec(message || '');
+  return m ? Number(m[1]) : null;
+}
+
+function isConnectionFailure(err) {
+  const code = `${err?.code || ''} ${err?.cause?.code || ''}`;
+  if (/ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|UND_ERR_/.test(code)) return true;
+  return /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|network error|terminated/i
+    .test(`${err?.message || ''}`);
+}
+
+/**
+ * 把一次通讀失敗歸成一類，給日誌與「該不該重試」共用。
+ * @returns {'idle'|'timeout'|'conn'|'output'|`http${number}`|'other'}
+ */
+export function analyzeErrorKind(err) {
+  if (err instanceof StreamInterruptedError) return err.kind;
+  const message = `${err?.message || ''}`;
+  // 模型輸出的問題（空正文／預算用盡／JSON 壞掉）重打大概率同樣結果，還多燒一次預算。
+  if (/摘要格式不正確|摘要無法解析為 JSON|輸出預算用盡/.test(message)) return 'output';
+  if (/AI 請求超時/.test(message)) return 'timeout';
+  const status = httpStatusOf(message);
+  if (status) return `http${status}`;
+  if (isConnectionFailure(err)) return 'conn';
+  return 'other';
+}
+
+/**
+ * 只對「連線／停滯類」重試。
+ *
+ * 4xx 是設定錯（base URL／key／模型名），重打只會再錯一次並多花錢；
+ * 「格式不正確」「輸出預算用盡」是模型輸出問題，同樣不該重打。
+ */
+export function isRetryableAnalyzeError(err) {
+  const kind = analyzeErrorKind(err);
+  if (kind === 'idle' || kind === 'timeout' || kind === 'conn') return true;
+  const status = kind.startsWith('http') ? Number(kind.slice(4)) : null;
+  return status !== null && [429, 502, 503, 504].includes(status);
+}
+
+/**
+ * 錯誤 → 給她看的那一句（繁體、帶「等了多久、收到多少」）。
+ * 既有的「格式不正確」「輸出預算用盡」「上次通讀被服務重啟打斷」保留原文。
+ */
+export function describeAnalyzeError(err) {
+  const message = `${err?.message || '未知錯誤'}`;
+  const kind = analyzeErrorKind(err);
+  if (kind === 'idle' || kind === 'timeout') return message; // 這兩句本來就是人話
+  if (kind === 'conn') {
+    const code = err?.cause?.code || err?.code;
+    const detail = `${message}${code ? ` / ${code}` : ''}`.slice(0, 80);
+    return `連不上通讀模型（${detail}）——請檢查網路或 VPN`;
+  }
+  if (kind.startsWith('http')) {
+    const status = Number(kind.slice(4));
+    const detail = message.replace(/^API error \d{3}: ?/, '').slice(0, 80);
+    const tail = status >= 500 || status === 429
+      ? '請稍後再試'
+      : '請檢查通讀模型設定（base URL／API key／模型名）';
+    return `上游回了 HTTP ${status}${detail ? `（${detail}）` : ''}——${tail}`;
+  }
+  return message;
+}
+
+function finalAnalyzeError(err, retriesUsed) {
+  const human = describeAnalyzeError(err);
+  if (retriesUsed > 0) {
+    const wrapped = new Error(`通讀失敗（已自動重試 ${retriesUsed} 次）：${human}。請稍後按「重新通讀」`);
+    wrapped.cause = err;
+    return wrapped;
+  }
+  // 沒重試過而且訊息本來就是人話時，原物件原樣往上丟（型別資訊對呼叫端有用）。
+  if (human === `${err?.message || ''}`) return err;
+  const wrapped = new Error(human);
+  wrapped.cause = err;
+  return wrapped;
+}
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
  * 把兩種 wire format 的「這次生成怎麼收尾的」抽成同一個形狀，給診斷訊息用。
  */
 export function completionMeta(config, data) {
@@ -621,10 +717,16 @@ async function buildAnalyzeUserContent(config, fullText, pdfPath) {
  * @param {number} [options.idleTimeoutMs] 覆蓋閒置逾時（預設讀 ANALYZE_IDLE_TIMEOUT_MS）
  * @param {number} [options.timeoutMs] 覆蓋單次請求的總逾時（預設 REQUEST_TIMEOUT_MS）
  */
-export async function analyzePaper(fullText, { pdfPath, idleTimeoutMs, timeoutMs } = {}) {
+export async function analyzePaper(fullText, {
+  pdfPath, paperId, idleTimeoutMs, timeoutMs, retries, retryDelayMs,
+} = {}) {
   const config = getAnalyzeConfig();
   const idleMs = idleTimeoutMs ?? resolveAnalyzeIdleTimeoutMs();
   const totalMs = timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const maxRetries = retries ?? resolveAnalyzeRetries();
+  const delayMs = retryDelayMs ?? ANALYZE_RETRY_DELAY_MS;
+  const tag = paperId || 'unknown';
+  // 視覺筆記只做一次：它自己也要打一次上游，不該跟著主請求重試燒兩遍。
   const userContent = await buildAnalyzeUserContent(config, fullText, pdfPath);
 
   const messages = [
@@ -647,35 +749,69 @@ export async function analyzePaper(fullText, { pdfPath, idleTimeoutMs, timeoutMs
     { role: 'user', content: userContent },
   ];
 
-  // 串流，不是為了逐字顯示（通讀沒有逐字 UI），是為了躲 OpenCode Go 的 60 秒非串流閘門：
-  // 實測 max_tokens=2000 就要 38.9 秒，預算拉到 8000 之後非串流必撞牆。
-  const response = await makeRequest({ ...config, scope: 'analyze' }, {
-    messages,
-    max_tokens: ANALYZE_MAX_TOKENS,
-    temperature: 0.2,
-    stream: true,
-    timeoutMs: totalMs,
-  });
+  let lastError = null;
+  let retriesUsed = 0;
 
-  // 通讀沒有逐字 UI，沒人會看著它停住——所以停滯要由程式自己發現，不能傻等滿 300s。
-  const streamStats = {};
-  const collected = await collectStream(config, response, {
-    idleTimeoutMs: idleMs,
-    totalTimeoutMs: totalMs,
-    stats: streamStats,
-  });
-  const result = extractAnalyzeJson(config, collected);
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt += 1) {
+    const startedAt = Date.now();
+    const streamStats = {};
+    log('INFO', `[ANALYZE] attempt=${attempt} paper=${tag} model=${config.model} chars_in=${fullText.length}`);
 
-  return {
-    title: result.title || '',
-    authors: result.authors || '',
-    year: result.year || null,
-    summary_bg: result.background || '',
-    summary_methods: result.methods || '',
-    summary_results: result.results || '',
-    summary_conclusions: result.conclusions || '',
-    summary_limitations: result.limitations || '',
-  };
+    try {
+      // 串流，不是為了逐字顯示（通讀沒有逐字 UI），是為了躲 OpenCode Go 的 60 秒非串流閘門：
+      // 實測 max_tokens=2000 就要 38.9 秒，預算拉到 8000 之後非串流必撞牆。
+      const response = await makeRequest({ ...config, scope: 'analyze' }, {
+        messages,
+        max_tokens: ANALYZE_MAX_TOKENS,
+        temperature: 0.2,
+        stream: true,
+        timeoutMs: totalMs,
+      });
+
+      // 通讀沒有逐字 UI，沒人會看著它停住——停滯要由程式自己發現，不能傻等滿 300s。
+      const collected = await collectStream(config, response, {
+        idleTimeoutMs: idleMs,
+        totalTimeoutMs: totalMs,
+        stats: streamStats,
+      });
+      const result = extractAnalyzeJson(config, collected);
+      const meta = completionMeta(config, collected);
+
+      log('INFO', `[ANALYZE] attempt=${attempt} ok elapsed=${elapsedSeconds(startedAt)}s`
+        + ` chunks=${streamStats.receivedChunks ?? 0}`
+        + ` chars_out=${responseText(config, collected).length}`
+        + ` finish=${meta.finishReason ?? '未提供'}`
+        + ` usage=${meta.usage ? JSON.stringify(meta.usage) : 'none'}`);
+
+      return {
+        title: result.title || '',
+        authors: result.authors || '',
+        year: result.year || null,
+        summary_bg: result.background || '',
+        summary_methods: result.methods || '',
+        summary_results: result.results || '',
+        summary_conclusions: result.conclusions || '',
+        summary_limitations: result.limitations || '',
+      };
+    } catch (err) {
+      lastError = err;
+      const kind = analyzeErrorKind(err);
+      log('WARN', `[ANALYZE] attempt=${attempt} fail elapsed=${elapsedSeconds(startedAt)}s kind=${kind}`
+        + ` chunks=${streamStats.receivedChunks ?? 0} chars_out=${streamStats.receivedChars ?? 0}`);
+
+      if (attempt > maxRetries || !isRetryableAnalyzeError(err)) break;
+
+      retriesUsed = attempt;
+      log('INFO', `[ANALYZE] retry ${attempt}/${maxRetries} paper=${tag} reason=${kind}`);
+      await sleep(delayMs);
+    }
+  }
+
+  throw finalAnalyzeError(lastError, retriesUsed);
+}
+
+function elapsedSeconds(startedAt) {
+  return ((Date.now() - startedAt) / 1000).toFixed(1);
 }
 
 // 論文區塊：標題/作者/年份/AI 摘要/全文。措辭逐字沿用工單 05 之前的 stableSystem，只是拿掉了身份句。
