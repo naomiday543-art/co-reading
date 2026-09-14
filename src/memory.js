@@ -15,6 +15,7 @@ import { syncInsightFireAndForget } from './gateway.js';
 import { renderDirectionsBlock } from './directions.js';
 import { findRelatedInsights } from './search.js';
 import { findDuplicate, DEDUP_NEAR_THRESHOLD } from './dedup.js';
+import { computeInsightLinks } from './insightLinks.js';
 // 六個維度的唯一事實源（工單 08 §3.2）。routes/insights.js 檔尾已 export，別在這裡複製一份。
 import { DIMENSIONS } from './routes/insights.js';
 
@@ -381,6 +382,11 @@ export async function extractInsights(paperId) {
       sourceContext,
       sourceMessageId
     );
+
+    // 聯想（§2 B1）：每插一條算一次，零 token。
+    try { computeInsightLinks(id); } catch (err) {
+      log('WARN', `[INSIGHT] link 計算失敗 ${id}: ${err.message?.slice(0, 120)}`);
+    }
 
     // outbox（契約 §五）：本地寫入成功後 fire-and-forget 出海到 gateway。
     // 絕不 await、絕不阻塞閱讀主流程；失敗留 synced_at IS NULL 靠啟動補傳。

@@ -4,6 +4,7 @@ import db from '../db.js';
 import { log } from '../logger.js';
 import { findRelatedInsights } from '../search.js';
 import { resolveSourceMessageId, loadSourceConversation, backfillInsightSources } from '../insightSource.js';
+import { computeInsightLinks, relinkAll } from '../insightLinks.js';
 
 const router = Router();
 
@@ -76,6 +77,12 @@ router.post('/insights/backfill-sources', (req, res) => {
   res.json(backfillInsightSources());
 });
 
+// POST /api/insights/relink-all —— 全量重算聯想（工單 18 §2 B1，冪等、零 token）
+router.post('/insights/relink-all', (req, res) => {
+  const { total, links } = relinkAll();
+  res.json({ ok: true, total, links });
+});
+
 // GET /api/insights/:id
 router.get('/insights/:id', (req, res) => {
   const insight = db.prepare('SELECT * FROM insights WHERE id = ?').get(req.params.id);
@@ -121,6 +128,9 @@ router.post('/insights', (req, res) => {
 
   log('INFO', `洞察已創建: ${id} [${dim}] ${title.trim().slice(0, 40)}`);
 
+  // 聯想（§2 B1）：零 token、同步一個 FTS 查詢。
+  computeInsightLinks(id);
+
   const insight = db.prepare('SELECT * FROM insights WHERE id = ?').get(id);
   res.json({
     ...insight,
@@ -163,6 +173,11 @@ router.patch('/insights/:id', (req, res) => {
     db.prepare(`UPDATE insights SET ${updates.join(', ')} WHERE id = ?`).run(...params);
   }
 
+  // 只有 title／content 真的變了才重算聯想——改維度或標籤不影響 FTS 相似度（§2 B1）。
+  const textChanged = (title !== undefined && title.trim() !== insight.title)
+    || (content !== undefined && content.trim() !== insight.content);
+  if (textChanged) computeInsightLinks(req.params.id);
+
   const updated = db.prepare('SELECT * FROM insights WHERE id = ?').get(req.params.id);
   res.json({
     ...updated,
@@ -176,6 +191,7 @@ router.delete('/insights/:id', (req, res) => {
   const insight = db.prepare('SELECT * FROM insights WHERE id = ?').get(req.params.id);
   if (!insight) return res.status(404).json({ error: '洞察不存在' });
 
+  // insight_links 的兩個外鍵都是 ON DELETE CASCADE ⇒ 連線自己跟著走（§2 B1）。
   db.prepare('DELETE FROM insights WHERE id = ?').run(req.params.id);
   log('INFO', `洞察已刪除: ${req.params.id}`);
   res.json({ ok: true });
