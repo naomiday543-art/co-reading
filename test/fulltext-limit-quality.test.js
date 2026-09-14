@@ -208,6 +208,223 @@ describe('§5.2 locateReferencesBlock', () => {
   });
 });
 
+// ── 工單 16：門檻 35% ＋ 多區塊 ─────────────────────────────────────────
+
+/**
+ * Nature 版式（她那篇 Cholesterol 的真實形狀）：
+ * 正文 → References(≈40%) → Methods → References(≈70%, 只有幾條) → Acknowledgements → 尾段。
+ * 兩個文獻表都要切，Methods 一個字都不能少。
+ */
+function natureFixture() {
+  const refs1 = fakeReferences(40);
+  const refs2 = fakeReferences(5, 41);
+  const body = fakeBody(12000);
+  const methods = fakeBody(9000 - refs1.length, 'METHOD');
+  const tail = fakeBody(8400, 'ACK');
+  return `${body}\nReferences\n${refs1}\nMethods\n${methods}\nReferences\n${refs2}\nAcknowledgements\n${tail}`;
+}
+
+describe('工單 16 §3.1 門檻 35%：[35%, 50%) 的候選要多過兩道閂', () => {
+  test('§5.1 Nature 版式：40% 主文獻表＋70% 補充文獻表兩塊都切，Methods 留著', () => {
+    const text = natureFixture();
+    const r = locateReferencesBlock(text);
+
+    assert.equal(r.cut, true);
+    assert.equal(r.reason, 'ok');
+    assert.equal(r.blocks.length, 2, '兩個文獻表都要進 blocks[]');
+
+    const ratio = r.blocks[0].start / text.length;
+    assert.ok(ratio >= 0.35 && ratio < 0.5, `第一塊要落在 [35%, 50%)，實際 ${(ratio * 100).toFixed(1)}%`);
+    assert.ok(r.blocks[1].start / text.length >= 0.5);
+    assert.ok(r.blocks[0].start < r.blocks[1].start, 'blocks 依 start 排序');
+    assert.ok(r.blocks[0].end <= r.blocks[1].start, 'blocks 不重疊');
+
+    // 第一塊的終點必須正好是 Methods 標題（不是文末、不是尾端回退出來的點）
+    assert.equal(text.slice(r.blocks[0].end).startsWith('Methods\n'), true);
+    assert.equal(text.slice(r.blocks[1].end).startsWith('Acknowledgements\n'), true);
+
+    assert.equal(r.chars_total, r.blocks[0].chars + r.blocks[1].chars);
+    // start/end/chars ＝最大那一塊（向後相容 UI 與工單 13 的既有測試）
+    assert.equal(r.start, r.blocks[0].start);
+    assert.equal(r.end, r.blocks[0].end);
+    assert.equal(r.chars, r.blocks[0].chars);
+    assert.ok(r.chars < r.chars_total, '最大那塊不等於全部，chars_total 才是合計');
+  });
+
+  test('§5.1 兩塊各放一行標記，Methods 與尾段一個字都不能少', () => {
+    const text = natureFixture();
+    const r = locateReferencesBlock(text);
+    const { text: sent, refsCut, refsChars, refsBlocks } = prepareFullTextForModel(text, null);
+
+    assert.equal(refsCut, true);
+    assert.equal(refsBlocks, 2);
+    assert.equal(refsChars, r.chars_total);
+
+    const markers = sent.match(/\[參考文獻 [\d,]+ 字已略去\]/g) || [];
+    assert.equal(markers.length, 2, '每個區塊各一行標記');
+    assert.equal(markers[0], `[參考文獻 ${r.blocks[0].chars.toLocaleString('en-US')} 字已略去]`);
+    assert.equal(markers[1], `[參考文獻 ${r.blocks[1].chars.toLocaleString('en-US')} 字已略去]`);
+
+    assert.ok(sent.includes('METHOD-0'), 'Methods 正文不能被切掉');
+    assert.ok(sent.includes('ACK-0'), '尾段不能被切掉');
+    assert.ok(sent.includes('BODY-0'), '正文不能被挖掉');
+    assert.ok(!sent.includes('1. Author A1,'), '主文獻表要不見');
+    assert.ok(!sent.includes('41. Author A41,'), '補充文獻表要不見');
+    assert.equal(sent.length, text.length - r.chars_total + markers.join('').length + 2);
+  });
+
+  test('§5.2 37% 的候選一路到文末（沒有終點標題）→ 不切', () => {
+    const text = `${fakeBody(7000)}\nReferences\n${fakeReferences(92)}`;
+    const r = locateReferencesBlock(text);
+    const ratio = text.indexOf('\nReferences\n') / text.length;
+    assert.ok(ratio >= 0.35 && ratio < 0.5, `fixture 要落在 [35%, 50%)，實際 ${(ratio * 100).toFixed(1)}%`);
+
+    assert.equal(r.cut, false);
+    assert.equal(r.reason, 'early_open_end');
+    assert.deepEqual(r.blocks, []);
+    assert.equal(r.chars_total, 0);
+    assert.equal(prepareFullTextForModel(text, null).text, text, '不切就是逐字原樣');
+  });
+
+  test('§5.2 同一塊文獻表，補上終點標題就切得掉（證明擋的是終點不明，不是位置）', () => {
+    const text = `${fakeBody(7000)}\nReferences\n${fakeReferences(92)}\nAcknowledgements\n${fakeBody(300, 'ACK')}`;
+    const r = locateReferencesBlock(text);
+    assert.equal(r.cut, true);
+    assert.equal(r.blocks.length, 1);
+    assert.equal(text.slice(r.end).startsWith('Acknowledgements\n'), true);
+  });
+
+  test('§5.3 37% 的候選終點是標題、但區塊只有 900 字 → 不切', () => {
+    const text = `${fakeBody(7000)}\nReferences\n${fakeReferences(7)}\nMethods\n${fakeBody(11000, 'METHOD')}`;
+    const r = locateReferencesBlock(text);
+    const ratio = text.indexOf('\nReferences\n') / text.length;
+    assert.ok(ratio >= 0.35 && ratio < 0.5, `fixture 要落在 [35%, 50%)，實際 ${(ratio * 100).toFixed(1)}%`);
+
+    assert.ok(r.chars < 2000 && r.chars > 500, `區塊要在 2,000 字門檻之下，實際 ${r.chars}`);
+    assert.equal(r.cut, false);
+    assert.equal(r.reason, 'early_too_short');
+    assert.ok(prepareFullTextForModel(text, null).text.includes('1. Author A1,'), '不切＝文獻條目還在');
+  });
+
+  test('§5.4 正文句子裡的 references（非獨立行）不是候選，真標題在後面才算', () => {
+    const sentence = '我們在 41% 的位置提到 see the references cited above for details，這是一句正文。';
+    const text = `${fakeBody(6000)}\n${sentence}\n${fakeBody(6000, 'MID')}\nReferences\n${fakeReferences(40)}\nAcknowledgements\n${fakeBody(400, 'ACK')}`;
+    const r = locateReferencesBlock(text);
+
+    assert.equal(r.cut, true);
+    assert.equal(r.blocks.length, 1, '正文那句不該變成第二塊');
+    assert.ok(r.start > text.indexOf(sentence), '取的是後面那個真標題');
+    const { text: sent } = prepareFullTextForModel(text, null);
+    assert.ok(sent.includes(sentence), '正文那句要留著');
+    assert.ok(sent.includes('MID-0'), '兩者之間的正文要留著');
+  });
+
+  test('[35%, 50%) 的密度門檻沒有被放寬（終點是標題、夠長，但整塊太稀）', () => {
+    // 尾端是真文獻（所以尾端回退不會動終點，兩道閂都過），但整塊被正文稀釋到 6/1000 以下。
+    const block = `${fakeBody(6000, 'NOT-REFS')}\n${fakeReferences(6)}`;
+    const text = `${fakeBody(9000)}\nReferences\n${block}\nMethods\n${fakeBody(6000, 'METHOD')}`;
+    const r = locateReferencesBlock(text);
+    const ratio = text.indexOf('\nReferences\n') / text.length;
+    assert.ok(ratio >= 0.35 && ratio < 0.5, `fixture 要落在 [35%, 50%)，實際 ${(ratio * 100).toFixed(1)}%`);
+
+    assert.equal(text.slice(r.end).startsWith('Methods\n'), true, '終點是標題、沒被尾端回退動過');
+    assert.ok(r.chars >= 2000, '長度也夠');
+    assert.equal(r.cut, false, '就差密度這一關');
+    assert.equal(r.reason, 'low_density');
+    assert.ok(r.density < MIN_CITATION_DENSITY);
+  });
+
+  test('兩道閂的順序：終點不明時先報 early_open_end（稀疏區塊會被尾端回退先動到）', () => {
+    const text = `${fakeBody(7000)}\nReferences\n${fakeBody(3000, 'NOT-REFS')}\nMethods\n${fakeBody(8000, 'METHOD')}`;
+    const r = locateReferencesBlock(text);
+    assert.equal(r.cut, false, '不管理由是哪一個，正文都不准被挖掉');
+    assert.equal(r.reason, 'early_open_end');
+    assert.ok(prepareFullTextForModel(text, null).text.includes('NOT-REFS-0'));
+  });
+
+  test('候選重疊時保留較早開始的那一塊（工單 16 §3.2）', () => {
+    const text = `${fakeBody(9000)}\nReferences\n${fakeReferences(30)}\nReferences\n${fakeReferences(30, 31)}\nAcknowledgements\n${fakeBody(400, 'ACK')}`;
+    const r = locateReferencesBlock(text);
+
+    assert.equal(r.cut, true);
+    assert.equal(r.blocks.length, 1, '後面那塊被前面那塊包住，只留一塊');
+    assert.equal(r.start, text.indexOf('\nReferences\n') + 1);
+    const { text: sent } = prepareFullTextForModel(text, null);
+    assert.equal((sent.match(/\[參考文獻 [\d,]+ 字已略去\]/g) || []).length, 1);
+    assert.ok(!sent.includes('31. Author A31,'), '兩張表都要切掉');
+  });
+
+  test('≥50% 的候選行為不變：尾端密度回退照舊保住圖注（她那篇 Immunity）', () => {
+    const legends = fakeBody(4000, 'FIGURE-LEGEND');
+    const text = paperWith(fakeReferences(60), `${legends}\nKEY RESOURCES TABLE\nReagent\tSource\n`,
+      { heading: 'REFERENCES' });
+    const r = locateReferencesBlock(text);
+
+    assert.equal(r.cut, true);
+    assert.equal(r.blocks.length, 1);
+    assert.ok(r.blocks[0].start / text.length >= 0.5, '這顆釘的是 ≥50% 那條路徑');
+    assert.ok(r.end < text.indexOf('KEY RESOURCES TABLE'), '尾端回退還在');
+    const { text: sent } = prepareFullTextForModel(text, null);
+    assert.ok(sent.includes('FIGURE-LEGEND-0'), '圖注必須留著');
+  });
+});
+
+describe('工單 16 §3.2 text_meta 的形狀與向後相容', () => {
+  test('buildTextMeta 多了 blocks[] 與 chars_total，version=2', () => {
+    const text = natureFixture();
+    const meta = buildTextMeta(text, []);
+
+    assert.equal(meta.version, TEXT_META_VERSION);
+    assert.equal(TEXT_META_VERSION, 2);
+    assert.equal(meta.references.blocks.length, 2);
+    assert.equal(meta.references.chars_total, meta.references.blocks.reduce((n, b) => n + b.chars, 0));
+    assert.equal(meta.references.chars, meta.references.blocks[0].chars, 'chars ＝最大那一塊');
+    for (const b of meta.references.blocks) {
+      assert.equal(text.slice(b.start, b.start + b.heading.length), b.heading);
+      assert.equal(b.reason, 'ok');
+      assert.equal(typeof b.density, 'number');
+    }
+  });
+
+  test('存下來的 blocks 直接拿來用（不必每輪重算），切出來跟現算的一樣', () => {
+    const text = natureFixture();
+    const meta = buildTextMeta(text, []);
+    const fromMeta = stripReferences(text, JSON.stringify(meta));
+    const fresh = stripReferences(text, null);
+    assert.equal(fromMeta.text, fresh.text);
+    assert.equal(fromMeta.blocks, 2);
+    assert.equal(fromMeta.chars, meta.references.chars_total);
+  });
+
+  test('工單 16 之前存的 v1 單塊 meta（沒有 blocks）照舊能用', () => {
+    const text = paperWith(fakeReferences(40));
+    const fresh = locateReferencesBlock(text);
+    const v1 = {
+      version: 1,
+      references: {
+        cut: true, start: fresh.start, end: fresh.end, chars: fresh.chars,
+        reason: 'ok', heading: fresh.heading, density: fresh.density,
+      },
+      pages: [], bad_pages: [],
+    };
+    const out = stripReferences(text, JSON.stringify(v1));
+    assert.equal(out.cut, true);
+    assert.equal(out.blocks, 1);
+    assert.equal(out.chars, fresh.chars);
+  });
+
+  test('存下來的 blocks 有一塊對不上標題 → 整份當場重算，不照著錯位置亂切', () => {
+    const text = natureFixture();
+    const meta = buildTextMeta(text, []);
+    meta.references.blocks[1] = { ...meta.references.blocks[1], start: 10, end: 400 };
+    const out = stripReferences(text, JSON.stringify(meta));
+
+    assert.equal(out.blocks, 2);
+    assert.equal(out.chars, locateReferencesBlock(text).chars_total, '應該用重算的結果');
+    assert.ok(out.text.includes('BODY-0'), '正文開頭不能被挖掉');
+  });
+});
+
 describe('§5.2 stripReferences：只動送出去的那份', () => {
   const text = paperWith(fakeReferences(40));
 
@@ -525,6 +742,99 @@ describe('§5.4 GET /api/papers/:id 的 lazy 補算與 rebuild 端點', () => {
   test('rebuild 不存在的論文 → 404', async () => {
     const res = await fetch(`${baseUrl}/api/papers/nope_${nanoid(4)}/text-meta/rebuild`, { method: 'POST' });
     assert.equal(res.status, 404);
+  });
+});
+
+// ── 工單 16 §3.3 版本升級自動重算 ───────────────────────────────────────
+
+describe('工單 16 §5.6 舊論文靠版本號在下次打開時自動重算', () => {
+  let server, baseUrl;
+  const ids = [];
+  // Nature 版式：v1 的規則只切得到後面那塊小的，v2 兩塊都切。
+  const fullText = natureFixture();
+
+  function insert(suffix, textMeta) {
+    const id = `tmv_${suffix}_${nanoid(4)}`;
+    ids.push(id);
+    db.prepare(`INSERT INTO papers (id, title, authors, year, full_text, text_meta, summary_bg,
+      summary_methods, summary_results, summary_conclusions, summary_limitations)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      id, 'Nature Layout', 'A', 2024, fullText, JSON.stringify(textMeta), 'bg', 'm', 'r', 'c', 'l'
+    );
+    return id;
+  }
+
+  /** 工單 13 時代存下來的樣子：單塊、只切到 70% 那張小表、有頁級品質。 */
+  const legacyPages = [
+    { n: 1, chars: 1800, lines: 40, quality: 'ok', reasons: [] },
+    { n: 2, chars: 90, lines: 3, quality: 'poor', reasons: ['too_short'] },
+  ];
+  const legacyMeta = {
+    version: 1,
+    references: {
+      cut: true, start: fullText.lastIndexOf('\nReferences\n') + 1, end: fullText.indexOf('\nAcknowledgements\n') + 1,
+      chars: 0, reason: 'ok', heading: 'References', density: 15,
+    },
+    pages: legacyPages,
+    bad_pages: [2],
+  };
+  legacyMeta.references.chars = legacyMeta.references.end - legacyMeta.references.start;
+
+  before(async () => {
+    const { startServer } = await import('../src/server.js');
+    await new Promise((resolve) => {
+      server = startServer(0, '127.0.0.1');
+      server.once('listening', () => {
+        baseUrl = `http://127.0.0.1:${server.address().port}`;
+        resolve();
+      });
+    });
+  });
+
+  after(() => {
+    for (const id of ids) db.prepare('DELETE FROM papers WHERE id = ?').run(id);
+    if (server) server.close();
+  });
+
+  test('version=1 的舊列被打開時重算成 2，頁級品質沿用舊值（不重解析 PDF）', async () => {
+    const id = insert('v1', legacyMeta);
+    const body = await (await fetch(`${baseUrl}/api/papers/${id}`)).json();
+
+    assert.equal(body.text_meta.version, TEXT_META_VERSION);
+    assert.equal(body.text_meta.references.blocks.length, 2, '兩塊都切到了（v1 只切得到一塊）');
+    assert.ok(body.text_meta.references.chars_total > legacyMeta.references.chars,
+      '切到的字數要比 v1 多');
+    assert.deepEqual(body.text_meta.pages, legacyPages, '頁級品質沿用舊值');
+    assert.deepEqual(body.text_meta.bad_pages, [2]);
+
+    const stored = parseTextMeta(db.prepare('SELECT text_meta FROM papers WHERE id = ?').get(id).text_meta);
+    assert.equal(stored.version, TEXT_META_VERSION, '重算要回寫，不是每次現算');
+    assert.deepEqual(stored.references.blocks, body.text_meta.references.blocks);
+    assert.equal(db.prepare('SELECT full_text FROM papers WHERE id = ?').get(id).full_text, fullText,
+      '升級路徑一樣不准動 full_text');
+  });
+
+  test('version=2 的列不重算（照抄回去，連刻意寫歪的欄位都不動）', async () => {
+    const pinned = {
+      version: TEXT_META_VERSION,
+      references: { cut: false, blocks: [], chars_total: 0, start: -1, end: -1, chars: 0, reason: 'low_density', heading: '', density: 1.5 },
+      pages: [], bad_pages: [],
+    };
+    const id = insert('v2', pinned);
+    const body = await (await fetch(`${baseUrl}/api/papers/${id}`)).json();
+
+    assert.deepEqual(body.text_meta, pinned, '版本夠新就不該被碰');
+    assert.equal(parseTextMeta(db.prepare('SELECT text_meta FROM papers WHERE id = ?').get(id).text_meta).references.reason,
+      'low_density');
+  });
+
+  test('沒有 version 欄位的舊列也會被重算（工單 13 之前的殘留）', async () => {
+    const id = insert('nov', { references: { cut: false, start: -1, end: -1, chars: 0, reason: 'no_heading', heading: '', density: 0 } });
+    const body = await (await fetch(`${baseUrl}/api/papers/${id}`)).json();
+
+    assert.equal(body.text_meta.version, TEXT_META_VERSION);
+    assert.equal(body.text_meta.references.cut, true);
+    assert.deepEqual(body.text_meta.pages, [], '沒有舊的頁級品質就留空');
   });
 });
 
