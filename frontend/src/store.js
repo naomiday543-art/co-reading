@@ -15,6 +15,29 @@ export function nextChatFontSize(size) {
   return CHAT_FONT_SIZES[(idx + 1) % CHAT_FONT_SIZES.length];
 }
 
+/** 等待提示要等這麼久才開始報秒數／字數——免得一送出就閃一個「已想 0 秒 · 0 字」。 */
+export const THINKING_LABEL_DELAY_MS = 2_000;
+
+/**
+ * 等待中那一行字（工單 12 §3.3）。
+ *
+ * 首字前實測 10–17 秒（報告 11 §5），舊版是三個沒有文字的點，看起來跟當掉一樣。
+ * 秒數由前端自己數（`startedAt`），字數來自後端的 `thinking` 事件——
+ * **只有字數，沒有思考內容**（§4 紅線）。字數是 0（例如非推理模型）時不硬報一個 0。
+ *
+ * @param {number|null} startedAt 這一輪開始的時間戳
+ * @param {number} chars 累計 reasoning 字數
+ * @param {number} [now]
+ */
+export function thinkingLabel(startedAt, chars, now = Date.now()) {
+  if (!startedAt) return '正在思考…';
+  const elapsedMs = now - startedAt;
+  if (elapsedMs < THINKING_LABEL_DELAY_MS) return '正在思考…';
+  const seconds = Math.floor(elapsedMs / 1000);
+  const charPart = chars > 0 ? ` · ${chars} 字` : '';
+  return `正在思考…（已想 ${seconds} 秒${charPart}）`;
+}
+
 // ── 多篇對比（工單 09 §3.3）────────────────────────────────────────
 // 上下限與後端 src/compare.js 的 MIN_PAPERS / MAX_PAPERS 是同一組數字；
 // 後端才是閘門（400），前端只是先擋住不讓她白跑一趟。

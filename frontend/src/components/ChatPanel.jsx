@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { streamChat, regenerateChat, continueChat, papersApi } from '../api';
-import { useStore, CHAT_FONT_PX, CHAT_FONT_LABELS, nextChatFontSize } from '../store';
+import { useStore, CHAT_FONT_PX, CHAT_FONT_LABELS, nextChatFontSize, thinkingLabel } from '../store';
 import CarryoverPanel from './CarryoverPanel';
 
 export function switchVersion(messages, messageId, direction) {
@@ -38,6 +38,13 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
   const [editingMsgId, setEditingMsgId] = useState(null);
   const [editContent, setEditContent] = useState('');
   const [showBranchesFor, setShowBranchesFor] = useState(null);
+  // 工單 12 §3.3／§3.4：等待期看得見（秒數＋思考字數）、可中止、失敗不抹半截。
+  const [thinkingChars, setThinkingChars] = useState(0);
+  const [thinkingStartedAt, setThinkingStartedAt] = useState(null);
+  const [, setTick] = useState(0);          // 只為了讓秒數每 500ms 重畫
+  const [streamNote, setStreamNote] = useState(''); // '' | 'stopped' | 'incomplete'
+  const [errorHint, setErrorHint] = useState('');
+  const abortRef = useRef(null);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
   const branchDropdownRef = useRef(null);
@@ -61,6 +68,16 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
     return () => document.removeEventListener('mousedown', handler);
   }, [showBranchesFor]);
 
+  // 等待提示的秒數是前端自己數的（後端只送字數），所以要有一顆心跳讓它重畫。
+  useEffect(() => {
+    if (!streaming) return;
+    const timer = setInterval(() => setTick(t => t + 1), 500);
+    return () => clearInterval(timer);
+  }, [streaming]);
+
+  // 換論文／卸載時把還在跑的那條收掉，免得回來時舊串流還在往新畫面寫字。
+  useEffect(() => () => abortRef.current?.abort(), []);
+
   const loadMessages = async () => {
     try {
       const msgs = await papersApi.getMessages(paperId);
@@ -70,63 +87,72 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
     } catch {}
   };
 
+  /**
+   * 三個入口（送出／重新生成／編輯後繼續）共用的串流殼。
+   *
+   * 兩條規矩寫在這裡，不散在三份 copy 裡：
+   * - **失敗不抹半截**：`onError` 只設錯誤，`streamingContent` 原封不動留在畫面上，
+   *   標「（未完成，未保存）」。舊代碼在這裡 `setStreamingContent('')`，已經上屏的字全沒了。
+   * - **中止**：`AbortController` 存在 ref 裡給「停止」按鈕用；abort 不是錯誤，不印紅框。
+   */
+  const runStream = async (invoke) => {
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setError('');
+    setErrorHint('');
+    setStreamNote('');
+    setThinkingChars(0);
+    setThinkingStartedAt(Date.now());
+    setStreaming(true);
+    setStreamingContent('');
+
+    try {
+      await invoke({
+        signal: controller.signal,
+        onDelta: (chunk) => setStreamingContent(prev => prev + chunk),
+        onThinking: ({ chars, done }) => { if (!done) setThinkingChars(chars); },
+        onDone: () => {
+          setStreamingContent('');
+          setStreaming(false);
+          loadMessages();
+        },
+        onError: (msg, data) => {
+          setError(msg);
+          setErrorHint(data?.hint || '');
+          if (data?.partial > 0) setStreamNote('incomplete');
+          setStreaming(false);
+        },
+      });
+    } catch (err) {
+      if (controller.signal.aborted || err?.name === 'AbortError') {
+        setStreamNote('stopped');
+      } else {
+        setError(err.message);
+        setStreamingContent('');
+      }
+      setStreaming(false);
+    } finally {
+      abortRef.current = null;
+    }
+  };
+
+  const handleStop = () => abortRef.current?.abort();
+
   const handleSend = async () => {
     if (!input.trim() || streaming) return;
     const userMsg = input.trim();
     setInput('');
-    setError('');
 
     const tempUser = { id: 'temp', role: 'user', content: userMsg, created_at: Date.now() };
     setMessages(prev => [...prev, tempUser]);
-    setStreaming(true);
-    setStreamingContent('');
 
-    try {
-      await streamChat(paperId, userMsg, {
-        onDelta: (chunk) => setStreamingContent(prev => prev + chunk),
-        onDone: () => {
-          setStreamingContent('');
-          setStreaming(false);
-          loadMessages();
-        },
-        onError: (msg) => {
-          setError(msg);
-          setStreamingContent('');
-          setStreaming(false);
-        },
-      });
-    } catch (err) {
-      setError(err.message);
-      setStreaming(false);
-      setStreamingContent('');
-    }
+    await runStream(opts => streamChat(paperId, userMsg, opts));
   };
 
   const handleRegenerate = async () => {
     if (streaming) return;
-    setError('');
-    setStreaming(true);
-    setStreamingContent('');
-
-    try {
-      await regenerateChat(paperId, {
-        onDelta: (chunk) => setStreamingContent(prev => prev + chunk),
-        onDone: () => {
-          setStreamingContent('');
-          setStreaming(false);
-          loadMessages();
-        },
-        onError: (msg) => {
-          setError(msg);
-          setStreamingContent('');
-          setStreaming(false);
-        },
-      });
-    } catch (err) {
-      setError(err.message);
-      setStreaming(false);
-      setStreamingContent('');
-    }
+    await runStream(opts => regenerateChat(paperId, opts));
   };
 
   const handleStartEdit = (msgId) => {
@@ -169,22 +195,7 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
       });
 
       // Continue: generate new AI response
-      setStreaming(true);
-      setStreamingContent('');
-
-      await continueChat(paperId, {
-        onDelta: (chunk) => setStreamingContent(prev => prev + chunk),
-        onDone: () => {
-          setStreamingContent('');
-          setStreaming(false);
-          loadMessages();
-        },
-        onError: (msg) => {
-          setError(msg);
-          setStreamingContent('');
-          setStreaming(false);
-        },
-      });
+      await runStream(opts => continueChat(paperId, opts));
     } catch (err) {
       setError(err.message);
       setStreaming(false);
@@ -433,8 +444,8 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
           );
         })}
 
-        {/* Streaming */}
-        {streaming && (
+        {/* Streaming — 串流結束後如果還有半截（失敗／被停止），這塊要繼續留著 */}
+        {(streaming || streamingContent) && (
           <div className="chat-bubble-ai p-3 max-w-[85%]">
             {streamingContent ? (
               <div className="prose-chat">
@@ -443,10 +454,21 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
                 </ReactMarkdown>
               </div>
             ) : (
-              <div className="flex gap-1">
-                <span className="w-2 h-2 bg-faint rounded-full typing-dot" />
-                <span className="w-2 h-2 bg-faint rounded-full typing-dot" />
-                <span className="w-2 h-2 bg-faint rounded-full typing-dot" />
+              /* 三個沒有文字的點最短也要跳 10 秒（報告 11 §6）——看起來跟當掉一樣。
+                 改成看得見的「正在思考」：秒數前端自己數，字數來自 thinking 事件。
+                 前 2 秒只留點，免得閃一個「0 字」。 */
+              <div className="flex items-center gap-2">
+                <div className="flex gap-1">
+                  <span className="w-2 h-2 bg-faint rounded-full typing-dot" />
+                  <span className="w-2 h-2 bg-faint rounded-full typing-dot" />
+                  <span className="w-2 h-2 bg-faint rounded-full typing-dot" />
+                </div>
+                <span className="text-xs text-muted">{thinkingLabel(thinkingStartedAt, thinkingChars)}</span>
+              </div>
+            )}
+            {streamNote && !streaming && (
+              <div className="mt-1.5 text-xs text-faint">
+                {streamNote === 'stopped' ? '（已停止，未保存）' : '（未完成，未保存）'}
               </div>
             )}
           </div>
@@ -455,6 +477,7 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
         {error && (
           <div className="p-2.5 text-sm text-danger bg-surface-alt border border-border-soft rounded-lg">
             {error}
+            {errorHint && <div className="mt-1 text-xs text-muted">{errorHint}</div>}
           </div>
         )}
 
@@ -474,13 +497,24 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
             onKeyDown={handleKeyDown}
             disabled={streaming}
           />
-          <button
-            className="px-4 py-2 bg-accent text-accent-fg rounded-xl text-sm font-medium hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-            onClick={handleSend}
-            disabled={streaming || !input.trim()}
-          >
-            送出
-          </button>
+          {streaming ? (
+            /* 工單 12 §3.4②：等了 10–17 秒又不想等的時候，她本來只能關頁面。
+               按下去 fetch 被 abort ⇒ 後端 res 'close' ⇒ 上游那條也收掉，不繼續燒。 */
+            <button
+              className="cr-chat-stop-btn px-4 py-2 bg-surface border border-border text-text rounded-xl text-sm font-medium hover:bg-surface-hover shrink-0"
+              onClick={handleStop}
+            >
+              停止
+            </button>
+          ) : (
+            <button
+              className="px-4 py-2 bg-accent text-accent-fg rounded-xl text-sm font-medium hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+              onClick={handleSend}
+              disabled={!input.trim()}
+            >
+              送出
+            </button>
+          )}
         </div>
         <button
           className="text-xs text-muted hover:text-accent flex items-center gap-1 px-1 transition-colors"

@@ -88,7 +88,14 @@ export const insightsApi = {
   related: (paperId) => request(`/insights/related?paper_id=${paperId}`),
 };
 
-async function readSSEStream(response, { onDelta, onDone, onError }) {
+/**
+ * 討論的 SSE 事件。
+ *
+ * `thinking`／`thinking_done` 是工單 12 §3.3 新加的：只帶字數與秒數，**沒有思考內容**。
+ * 舊的三顆（delta／done／error）行為不變；error 現在多帶 `partial` 與 `hint`，
+ * 從第二個參數拿（舊呼叫端只吃第一個字串，照樣能動）。
+ */
+export async function readSSEStream(response, { onDelta, onDone, onError, onThinking }) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -108,34 +115,43 @@ async function readSSEStream(response, { onDelta, onDone, onError }) {
         const data = JSON.parse(trimmed.slice(6));
         if (data.type === 'delta') onDelta(data.content);
         else if (data.type === 'done') onDone(data);
-        else if (data.type === 'error') onError(data.message);
+        else if (data.type === 'error') onError(data.message, data);
+        else if (data.type === 'thinking') onThinking?.({ chars: data.chars, done: false });
+        else if (data.type === 'thinking_done') {
+          onThinking?.({ chars: data.chars, seconds: data.seconds, done: true });
+        }
       } catch {}
     }
   }
 }
 
-export function streamChat(paperId, message, { onDelta, onDone, onError }) {
+// `signal`：她按「停止」時中止這條 fetch。連線一斷，後端 `res` 的 'close' 就會把上游
+// 那條也收掉（工單 12 §3.4②），不會留一個沒人看的生成繼續燒。
+export function streamChat(paperId, message, { onDelta, onDone, onError, onThinking, signal }) {
   return fetch(`${API}/api/papers/${paperId}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message }),
-  }).then(response => readSSEStream(response, { onDelta, onDone, onError }));
+    signal,
+  }).then(response => readSSEStream(response, { onDelta, onDone, onError, onThinking }));
 }
 
-export function regenerateChat(paperId, { onDelta, onDone, onError }) {
+export function regenerateChat(paperId, { onDelta, onDone, onError, onThinking, signal }) {
   return fetch(`${API}/api/papers/${paperId}/chat?regenerate=true`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({}),
-  }).then(response => readSSEStream(response, { onDelta, onDone, onError }));
+    signal,
+  }).then(response => readSSEStream(response, { onDelta, onDone, onError, onThinking }));
 }
 
-export function continueChat(paperId, { onDelta, onDone, onError }) {
+export function continueChat(paperId, { onDelta, onDone, onError, onThinking, signal }) {
   return fetch(`${API}/api/papers/${paperId}/chat?continue=true`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({}),
-  }).then(response => readSSEStream(response, { onDelta, onDone, onError }));
+    signal,
+  }).then(response => readSSEStream(response, { onDelta, onDone, onError, onThinking }));
 }
 
 // 閱讀活動面板（工單 04）。days：1..730，0 = 不限（All）。只回計數，不回內容。
