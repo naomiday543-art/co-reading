@@ -5,7 +5,7 @@ import { join } from 'path';
 import { unlinkSync, existsSync } from 'fs';
 import db from '../db.js';
 import { extractPDF } from '../pdf.js';
-import { analyzePaper } from '../ai.js';
+import { analyzePaper, PAPER_FULLTEXT_LIMIT } from '../ai.js';
 import { log } from '../logger.js';
 import { extractInsights } from '../memory.js';
 import { requestRefine, fetchCarryover, fetchClaimProvenance, getCachedCarryover, sessionKeyFor, isCarryoverInjected, setCarryoverInjected } from '../carryover.js';
@@ -209,7 +209,19 @@ router.get('/:id', (req, res) => {
     treeNode = db.prepare('SELECT id, name FROM tree_nodes WHERE id = ?').get(paper.tree_node_id);
   }
 
-  res.json({ ...paper, tags, tree_node: treeNode });
+  // 工單 12 §3.5：全文超過上限時 AI 只讀得到前 100,000 字，UI 要說出來
+  //（她那篇 146,272 字的，後面 46,272 字 AI 從來沒看過，畫面上完全沒提示）。
+  // 截斷邏輯在 buildPaperBlock，這裡只是報告同一個判斷。
+  const fullTextChars = paper.full_text?.length || 0;
+
+  res.json({
+    ...paper,
+    tags,
+    tree_node: treeNode,
+    full_text_chars: fullTextChars,
+    full_text_truncated: fullTextChars > PAPER_FULLTEXT_LIMIT,
+    full_text_limit: PAPER_FULLTEXT_LIMIT,
+  });
 });
 
 // PATCH /api/papers/:id

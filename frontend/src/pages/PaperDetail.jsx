@@ -312,6 +312,13 @@ export default function PaperDetail({ paperId, onBack }) {
           <div className="overflow-y-auto pr-4 flex-1">
           {leftTab === 'summary' ? (
             <>
+            {/* 工單 12 §3.5：AI 只讀得到前 100,000 字，超過的部分她有權知道 */}
+            {paper.full_text_truncated && (
+              <div className="mb-3 text-xs text-muted">
+                全文 {paper.full_text_chars.toLocaleString('en-US')} 字，AI 只讀前{' '}
+                {(paper.full_text_limit || 100000).toLocaleString('en-US')} 字
+              </div>
+            )}
             <SummaryView paper={paper} />
 
           {/* Retry analyze */}
