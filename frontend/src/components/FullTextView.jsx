@@ -32,7 +32,7 @@ function TextBody({ paper, paragraphs }) {
   const clearQuoteJump = useStore(s => s.clearQuoteJump);
 
   const [selection, setSelection] = useState(null);   // { quote, rect }
-  const [flashIdx, setFlashIdx] = useState(-1);
+  const [flash, setFlash] = useState(null);           // { idx, ts } — 跳回時閃一下的那一段
   const paraRefs = useRef([]);
   const rootRef = useRef(null);
 
@@ -76,11 +76,17 @@ function TextBody({ paper, paragraphs }) {
     if (idx < 0) { clearQuoteJump(); return; }
     const el = paraRefs.current[idx];
     el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    setFlashIdx(idx);
+    setFlash({ idx, ts: quoteJump.ts });
     clearQuoteJump();
-    const timer = setTimeout(() => setFlashIdx(-1), 1800);
-    return () => clearTimeout(timer);
   }, [quoteJump, paragraphs, clearQuoteJump]);
+
+  // 熄燈另外一顆 effect：跟上面那顆綁在一起的話，`clearQuoteJump()` 會讓它立刻
+  // 重跑並在 cleanup 裡把 timer 清掉 ⇒ 高亮永遠不滅（自驗時踩到）。
+  useEffect(() => {
+    if (!flash) return;
+    const timer = setTimeout(() => setFlash(null), 1800);
+    return () => clearTimeout(timer);
+  }, [flash]);
 
   const handleAsk = () => {
     if (!selection) return;
@@ -104,7 +110,7 @@ function TextBody({ paper, paragraphs }) {
             ref={el => { paraRefs.current[i] = el; }}
             {...{ [OFFSET_ATTR]: String(para.start) }}
             className={`cr-serif text-[13.5px] text-text leading-relaxed whitespace-pre-wrap${
-              flashIdx === i ? ' cr-quote-flash' : ''
+              flash?.idx === i ? ' cr-quote-flash' : ''
             }`}
           >
             {para.text}
