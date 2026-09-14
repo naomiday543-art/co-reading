@@ -137,7 +137,15 @@ export function isVisionEnabled(config) {
   return /claude|vision|gpt-4o|gpt-4\.1|gpt-5|gemini/.test(target);
 }
 
-export function buildBody({ model, format }, { messages, stream, max_tokens, temperature }) {
+/**
+ * @param {object} config
+ * @param {object} params
+ * @param {boolean} [params.streamUsage] openai 格式專用：串流時要不要請上游把 usage 補一顆
+ *   尾事件回來（`stream_options:{include_usage:true}`）。**預設不送**——通讀／提取／對比
+ *   三條線的 body 必須與改動前逐字相同（工單 12 §4 紅線）。討論線由 `chatAboutPaper`
+ *   依 `CHAT_STREAM_USAGE` 顯式打開（預設開），這樣 `[CHAT] ok` 才有 cache_hit 可印。
+ */
+export function buildBody({ model, format }, { messages, stream, max_tokens, temperature, streamUsage }) {
   if (format === 'anthropic') {
     let system = null;
     const chatMessages = [];
@@ -159,13 +167,15 @@ export function buildBody({ model, format }, { messages, stream, max_tokens, tem
     return body;
   }
 
-  return {
+  const body = {
     model,
     messages: messages.map(m => ({ ...m, content: serializeContent(m.content, 'openai') })),
     max_tokens: max_tokens || 4096,
     stream: stream || false,
     temperature: temperature !== undefined ? temperature : 0.7,
   };
+  if (body.stream && streamUsage) body.stream_options = { include_usage: true };
+  return body;
 }
 
 export function buildEndpoint({ baseUrl, format }) {
@@ -186,6 +196,27 @@ export function buildEndpoint({ baseUrl, format }) {
  */
 export const REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS) || 300_000;
 
+/**
+ * 逾時 signal ＋ 呼叫端的取消 signal 合成一顆。
+ *
+ * 討論線要能在她按「停止」（或關掉頁面 ⇒ `req.on('close')`）時把上游那條連線也收掉，
+ * 否則 server 還在替一個沒人看的答案付錢。`AbortSignal.any` 是 Node ≥20.3；
+ * 舊 runtime 手動接線，行為一樣。
+ */
+function combineSignals(timeoutMs, external) {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  if (!external) return timeout;
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any([timeout, external]);
+  const controller = new AbortController();
+  const forward = (signal) => {
+    if (signal.aborted) controller.abort(signal.reason);
+    else signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+  };
+  forward(timeout);
+  forward(external);
+  return controller.signal;
+}
+
 async function makeRequest(config, params) {
   const url = buildEndpoint(config);
   const headers = buildHeaders(config);
@@ -199,9 +230,10 @@ async function makeRequest(config, params) {
       headers,
       body: JSON.stringify(body),
       // 這顆 signal 同時蓋住「等標頭」與「讀 body」兩段——串流讀到一半上游靜默斷線也會收到 abort。
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: combineSignals(timeoutMs, params.signal),
     });
   } catch (err) {
+    if (params.signal?.aborted) throw new ChatAbortedError();
     if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
       throw new Error(`AI 請求超時（${Math.round(timeoutMs / 1000)}s 沒有結果）`);
     }
@@ -238,6 +270,21 @@ export class StreamInterruptedError extends Error {
     this.receivedChunks = receivedChunks;
     this.receivedChars = receivedChars;
     this.elapsedMs = elapsedMs;
+  }
+}
+
+/**
+ * 呼叫端主動取消（她按「停止」／關掉頁面）。
+ *
+ * 跟停滯／逾時長得很像（底層一樣是 AbortError），但語意相反：**這不是故障**，
+ * 所以不重試、不寫 DB、也不該在 UI 上印紅框。
+ */
+export class ChatAbortedError extends Error {
+  constructor(receivedChars = 0) {
+    super('已停止生成');
+    this.name = 'ChatAbortedError';
+    this.kind = 'aborted';
+    this.receivedChars = receivedChars;
   }
 }
 
@@ -302,7 +349,8 @@ const IDLE_SIGNAL = Symbol('sse-idle-timeout');
  * @param {number} [options.idleTimeoutMs] >0 時啟用閒置逾時（兩個 chunk 之間的最長間隔）
  * @param {number} [options.totalTimeoutMs] >0 時把讀 body 階段的原生 TimeoutError/AbortError
  *   翻成 StreamTimeoutError（帶這個秒數）
- * @param {{receivedChunks?: number, receivedChars?: number, elapsedMs?: number}} [options.stats]
+ * @param {{receivedChunks?: number, receivedChars?: number, elapsedMs?: number,
+ *   maxGapMs?: number, firstByteAt?: number}} [options.stats]
  *   可選的統計回填容器，給日誌用
  *
  * **不傳 options 時走的是與改動前逐字相同的路徑**（沒有計時器、沒有錯誤翻譯）——
@@ -316,11 +364,18 @@ async function* sseEvents(response, { idleTimeoutMs = 0, totalTimeoutMs = 0, sta
   const startedAt = Date.now();
   let receivedChunks = 0;
   let receivedChars = 0;
+  // 報告 11 §5：一發正常的討論裡 raw chunk 最大間隔只有 0.86–0.91s，停滯那發是 31.2s。
+  // 把這個數字留在 stats 裡，[CHAT] 日誌才分得出「上游慢」與「上游停住過」。
+  let maxGapMs = 0;
+  let firstByteAt = null;
+  let lastChunkAt = startedAt;
   const guarded = idleTimeoutMs > 0 || totalTimeoutMs > 0;
   const snapshot = () => ({
     receivedChunks,
     receivedChars,
     elapsedMs: Date.now() - startedAt,
+    maxGapMs,
+    firstByteAt,
   });
   const publish = () => {
     if (stats) Object.assign(stats, snapshot());
@@ -350,6 +405,12 @@ async function* sseEvents(response, { idleTimeoutMs = 0, totalTimeoutMs = 0, sta
 
     const { done, value } = chunk;
     if (done) break;
+
+    const now = Date.now();
+    // 第一個 chunk 之前那段是 TTFB（等標頭＋上游起跑），不算「間隔」——只量 chunk 與 chunk 之間。
+    if (receivedChunks > 0) maxGapMs = Math.max(maxGapMs, now - lastChunkAt);
+    else firstByteAt = now;
+    lastChunkAt = now;
 
     receivedChunks += 1;
     const text = decoder.decode(value, { stream: true });
@@ -429,19 +490,56 @@ export async function collectStream(config, response, streamOptions) {
   };
 }
 
-export async function* streamAnthropic(response) {
-  for await (const json of sseEvents(response)) {
-    if (json.type === 'content_block_delta' && json.delta?.text) {
-      yield json.delta.text;
+/**
+ * 逐字串流（討論線）。**只 yield 正文**。
+ *
+ * @param {object} response
+ * @param {object} [opts]
+ * @param {number} [opts.idleTimeoutMs] 透傳給 `sseEvents`
+ * @param {number} [opts.totalTimeoutMs] 透傳給 `sseEvents`
+ * @param {object} [opts.stats] 透傳給 `sseEvents`，另外回填 `finishReason` / `usage` / `reasoningChars`
+ * @param {(text: string) => void} [opts.onReasoning] 思考鏈的 delta。
+ *   **只是拿來算字數給「正在思考…」用**——工單 12 §4 紅線：reasoning 內容絕不進
+ *   messages.content、絕不進 DB、絕不進下一輪 prompt，所以它不在 yield 的正文裡。
+ *
+ * 不傳 opts 時逐字行為與改動前一字不差（`sseEvents(response, {})` ⇒ guarded=false）。
+ */
+export async function* streamAnthropic(response, opts = {}) {
+  const { stats, onReasoning } = opts;
+  for await (const json of sseEvents(response, opts)) {
+    if (json.type === 'content_block_delta') {
+      const thinking = json.delta?.thinking;
+      if (thinking) noteReasoning(stats, onReasoning, thinking);
+      if (json.delta?.text) yield json.delta.text;
+    }
+    if (json.type === 'message_start' && json.message?.usage && stats) {
+      stats.usage = { ...json.message.usage };
+    }
+    if (json.type === 'message_delta' && stats) {
+      if (json.delta?.stop_reason) stats.finishReason = json.delta.stop_reason;
+      if (json.usage) stats.usage = { ...(stats.usage || {}), ...json.usage };
     }
   }
 }
 
-export async function* streamOpenAI(response) {
-  for await (const json of sseEvents(response)) {
-    const delta = json.choices?.[0]?.delta?.content;
+/** 同 `streamAnthropic`，openai wire format。 */
+export async function* streamOpenAI(response, opts = {}) {
+  const { stats, onReasoning } = opts;
+  for await (const json of sseEvents(response, opts)) {
+    const choice = json.choices?.[0];
+    const reasoning = choice?.delta?.reasoning_content;
+    if (reasoning) noteReasoning(stats, onReasoning, reasoning);
+    if (choice?.finish_reason && stats) stats.finishReason = choice.finish_reason;
+    // include_usage 打開時 usage 是最後一顆事件（choices 為空陣列），所以獨立判。
+    if (json.usage && stats) stats.usage = json.usage;
+    const delta = choice?.delta?.content;
     if (delta) yield delta;
   }
+}
+
+function noteReasoning(stats, onReasoning, text) {
+  if (stats) stats.reasoningChars = (stats.reasoningChars || 0) + text.length;
+  onReasoning?.(text);
 }
 
 // 提取線（memory.js）也要從同一份 wire format 規則裡挖正文——工單 08 §3.1 把那邊的
@@ -507,6 +605,50 @@ export function resolveAnalyzeRetries() {
 /** 兩次嘗試之間的固定間隔。只重試一次，沒必要做指數退避。 */
 export const ANALYZE_RETRY_DELAY_MS = 2_000;
 
+/**
+ * 討論串流的閒置逾時。預設 45s。
+ *
+ * 為什麼比通讀的 60s 短：討論有逐字 UI，她是坐在那裡等的；報告 11 §5 實測三發正常
+ * 討論的 raw chunk 最大間隔只有 0.86–0.91s，45 秒不動已經是「這條連線壞了」而不是
+ * 「模型在想」（思考期一樣每秒送 reasoning_content，計時器會被重置）。
+ * 空／0／非數字 → 預設；其餘 clamp 到 [5s, setTimeout 天花板]。寫法與通讀那顆同一套。
+ */
+export function resolveChatIdleTimeoutMs() {
+  const raw = process.env.CHAT_IDLE_TIMEOUT_MS;
+  if (raw === undefined || raw === null || `${raw}`.trim() === '') return 45_000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 45_000;
+  return clampNumber(n, { min: 5_000, max: MAX_TIMER_MS, fallback: 45_000 });
+}
+
+/**
+ * 討論線的自動重試次數。預設 1，clamp [0,3]。
+ *
+ * 只在「一個正文字都還沒吐出來」時才會真的用到（見 `chatAboutPaper`）——已經上屏的
+ * 半截答案重打一次會從頭再來一遍，畫面上是答案跳一下，比停在那裡更糟。
+ */
+export function resolveChatRetries() {
+  const raw = process.env.CHAT_RETRIES;
+  if (raw === undefined || raw === null || `${raw}`.trim() === '') return 1;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 1;
+  return clampNumber(n, { min: 0, max: 3, fallback: 1 });
+}
+
+/** 兩次嘗試之間的固定間隔（討論線）。 */
+export const CHAT_RETRY_DELAY_MS = 2_000;
+
+/**
+ * 討論線要不要請上游回報 usage（`stream_options:{include_usage:true}`）。
+ * 預設開——報告 11 §5 實測 OpenCode Go 認這顆並回 `prompt_tokens_details.cached_tokens`，
+ * 這是 `[CHAT] ok` 裡 cache_hit 的唯一來源。`CHAT_STREAM_USAGE=false` 可關。
+ */
+export function resolveChatStreamUsage() {
+  const raw = process.env.CHAT_STREAM_USAGE;
+  if (raw === undefined || raw === null || `${raw}`.trim() === '') return true;
+  return !['0', 'false', 'off', 'no'].includes(`${raw}`.trim().toLowerCase());
+}
+
 function httpStatusOf(message) {
   const m = /^API error (\d{3})\b/.exec(message || '');
   return m ? Number(m[1]) : null;
@@ -553,20 +695,32 @@ export function isRetryableAnalyzeError(err) {
  * 既有的「格式不正確」「輸出預算用盡」「上次通讀被服務重啟打斷」保留原文。
  */
 export function describeAnalyzeError(err) {
+  return describeUpstreamError(err, '通讀模型');
+}
+
+/**
+ * 同一套翻譯，換成討論線的字眼（她看到的是「討論模型」不是「通讀模型」）。
+ * 停滯／逾時那兩句本來就帶「已收到 N 字」，原樣沿用。
+ */
+export function describeChatError(err) {
+  return describeUpstreamError(err, '討論模型');
+}
+
+function describeUpstreamError(err, lineLabel) {
   const message = `${err?.message || '未知錯誤'}`;
   const kind = analyzeErrorKind(err);
   if (kind === 'idle' || kind === 'timeout') return message; // 這兩句本來就是人話
   if (kind === 'conn') {
     const code = err?.cause?.code || err?.code;
     const detail = `${message}${code ? ` / ${code}` : ''}`.slice(0, 80);
-    return `連不上通讀模型（${detail}）——請檢查網路或 VPN`;
+    return `連不上${lineLabel}（${detail}）——請檢查網路或 VPN`;
   }
   if (kind.startsWith('http')) {
     const status = Number(kind.slice(4));
     const detail = message.replace(/^API error \d{3}: ?/, '').slice(0, 80);
     const tail = status >= 500 || status === 429
       ? '請稍後再試'
-      : '請檢查通讀模型設定（base URL／API key／模型名）';
+      : `請檢查${lineLabel}設定（base URL／API key／模型名）`;
     return `上游回了 HTTP ${status}${detail ? `（${detail}）` : ''}——${tail}`;
   }
   return message;
@@ -810,8 +964,8 @@ export async function analyzePaper(fullText, {
   throw finalAnalyzeError(lastError, retriesUsed);
 }
 
-function elapsedSeconds(startedAt) {
-  return ((Date.now() - startedAt) / 1000).toFixed(1);
+function elapsedSeconds(startedAt, endedAt) {
+  return (((endedAt ?? Date.now()) - startedAt) / 1000).toFixed(1);
 }
 
 // 論文區塊：標題/作者/年份/AI 摘要/全文。措辭逐字沿用工單 05 之前的 stableSystem，只是拿掉了身份句。
@@ -857,7 +1011,41 @@ export function buildChatSystem(paper, { constitution, format, directionsBlock }
   return constitution + '\n\n' + paperBlock;
 }
 
-export async function chatAboutPaper(paper, history, userMessage, onChunk) {
+/** system 可能是字串（openai）或 cache block 陣列（anthropic）——兩種都要能算字數給日誌。 */
+function systemChars(system) {
+  if (typeof system === 'string') return system.length;
+  if (Array.isArray(system)) return system.reduce((n, b) => n + (b?.text?.length || 0), 0);
+  return 0;
+}
+
+/**
+ * usage → `cached/prompt` 這個形狀。兩種 wire format 的欄位名不同。
+ * 拿不到（上游沒回／關掉 include_usage）時回 'none'，不要印半個數字讓人誤判。
+ */
+function cacheHitOf(usage) {
+  if (!usage) return 'none';
+  const prompt = usage.prompt_tokens ?? usage.input_tokens;
+  const cached = usage.prompt_tokens_details?.cached_tokens ?? usage.cache_read_input_tokens;
+  if (prompt === undefined || cached === undefined) return 'none';
+  return `${cached}/${prompt}`;
+}
+
+/**
+ * 討論線的一輪。
+ *
+ * @param {object} paper
+ * @param {Array} history
+ * @param {string|null} userMessage
+ * @param {(chunk: string) => void} onChunk 正文逐字回呼
+ * @param {object} [options]
+ * @param {(text: string) => void} [options.onReasoning] 思考鏈 delta（只用來算字數，內容不外流）
+ * @param {AbortSignal} [options.signal] 她按「停止」／關頁面時用來收掉上游那條連線
+ * @param {number} [options.idleTimeoutMs] 覆蓋閒置逾時（預設讀 CHAT_IDLE_TIMEOUT_MS）
+ * @param {number} [options.timeoutMs] 覆蓋單次請求總逾時
+ * @param {number} [options.retries] 覆蓋重試次數（預設讀 CHAT_RETRIES）
+ * @param {number} [options.retryDelayMs]
+ */
+export async function chatAboutPaper(paper, history, userMessage, onChunk, options = {}) {
   const config = getChatConfig();
   const { text: constitution, source: constitutionSource } = loadConstitution();
 
@@ -939,22 +1127,109 @@ export async function chatAboutPaper(paper, history, userMessage, onChunk) {
     messages.push({ role: 'user', content: userMessage });
   }
 
-  const response = await makeRequest({ ...config, scope: `paper:${paper.id}` }, {
-    messages,
-    max_tokens: 4096,
-    temperature: 0.3,
-    stream: true,
-  });
-
+  const {
+    onReasoning, signal,
+    idleTimeoutMs, timeoutMs, retries, retryDelayMs,
+  } = options;
+  const idleMs = idleTimeoutMs ?? resolveChatIdleTimeoutMs();
+  const totalMs = timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const maxRetries = retries ?? resolveChatRetries();
+  const delayMs = retryDelayMs ?? CHAT_RETRY_DELAY_MS;
+  const scope = `paper:${paper.id}`;
   const streamGen = config.format === 'anthropic' ? streamAnthropic : streamOpenAI;
 
-  let fullResponse = '';
-  for await (const chunk of streamGen(response)) {
-    fullResponse += chunk;
-    onChunk(chunk);
+  log('INFO', `[CHAT] start paper=${paper.id} model=${config.model}`
+    + ` sys_chars=${systemChars(systemForRequest)} hist=${history.length}條 scope=${scope}`);
+
+  let lastError = null;
+  let retriesUsed = 0;
+
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt += 1) {
+    const startedAt = Date.now();
+    const stats = {};
+    let fullResponse = '';
+    let firstContentAt = null;
+    let headersAt = null;
+
+    try {
+      const response = await makeRequest({ ...config, scope }, {
+        messages,
+        max_tokens: 4096,
+        temperature: 0.3,
+        stream: true,
+        timeoutMs: totalMs,
+        signal,
+        streamUsage: resolveChatStreamUsage(),
+      });
+      headersAt = Date.now();
+
+      // 走 guarded 路徑（idleTimeoutMs > 0）⇒ 中途停滯 45s 就翻成 StreamIdleError，
+      // 300s 總逾時也不再漏出原生英文 `The operation was aborted due to timeout`。
+      for await (const chunk of streamGen(response, {
+        idleTimeoutMs: idleMs,
+        totalTimeoutMs: totalMs,
+        stats,
+        onReasoning,
+      })) {
+        if (firstContentAt === null) firstContentAt = Date.now();
+        fullResponse += chunk;
+        onChunk(chunk);
+      }
+
+      log('INFO', `[CHAT] ok paper=${paper.id}`
+        + ` ttfb=${elapsedSeconds(startedAt, headersAt)}s`
+        + ` ttft=${firstContentAt ? elapsedSeconds(startedAt, firstContentAt) : '未提供'}s`
+        + ` elapsed=${elapsedSeconds(startedAt)}s`
+        + ` chunks=${stats.receivedChunks ?? 0}`
+        + ` chars_out=${fullResponse.length}`
+        + ` reasoning_chars=${stats.reasoningChars ?? 0}`
+        + ` max_gap=${stats.maxGapMs ?? 0}ms`
+        + ` finish=${stats.finishReason ?? '未提供'}`
+        + ` cache_hit=${cacheHitOf(stats.usage)}`
+        + ` usage=${stats.usage ? JSON.stringify(stats.usage) : 'none'}`);
+
+      return fullResponse;
+    } catch (err) {
+      // 她自己按的「停止」不是故障：不重試、不包裝、原樣往上丟給路由決定怎麼收尾。
+      if (err instanceof ChatAbortedError || signal?.aborted) {
+        throw err instanceof ChatAbortedError ? err : new ChatAbortedError(fullResponse.length);
+      }
+
+      lastError = err;
+      const kind = analyzeErrorKind(err);
+      log('WARN', `[CHAT] fail paper=${paper.id} elapsed=${elapsedSeconds(startedAt)}s kind=${kind}`
+        + ` chars_out=${fullResponse.length} max_gap=${stats.maxGapMs ?? 0}ms`);
+
+      // 已經吐過正文就絕不重試：重打會讓畫面上的半截答案整段被另一份取代。
+      // 半截由前端保住（工單 12 §3.4-③），錯誤訊息帶 partial 告訴她收到多少。
+      if (fullResponse.length > 0) {
+        err.partialChars = fullResponse.length;
+        break;
+      }
+      if (attempt > maxRetries || !isRetryableAnalyzeError(err)) break;
+
+      retriesUsed = attempt;
+      log('INFO', `[CHAT] retry ${attempt}/${maxRetries} paper=${paper.id} reason=${kind}`);
+      await sleep(delayMs);
+    }
   }
 
-  return fullResponse;
+  throw finalChatError(lastError, retriesUsed);
+}
+
+function finalChatError(err, retriesUsed) {
+  const human = describeChatError(err);
+  if (retriesUsed > 0) {
+    const wrapped = new Error(`回覆失敗（已自動重試 ${retriesUsed} 次）：${human}`);
+    wrapped.cause = err;
+    wrapped.partialChars = err?.partialChars || 0;
+    return wrapped;
+  }
+  if (human === `${err?.message || ''}`) return err;
+  const wrapped = new Error(human);
+  wrapped.cause = err;
+  wrapped.partialChars = err?.partialChars || 0;
+  return wrapped;
 }
 
 export async function testConnection({ base_url, api_key, model, format }) {
