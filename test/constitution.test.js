@@ -12,7 +12,7 @@ import {
   builtinConstitutionPath,
   FALLBACK_CONSTITUTION,
 } from '../src/constitution.js';
-import { buildChatSystem, buildPaperBlock } from '../src/ai.js';
+import { buildChatSystem, buildPaperBlock, resolvePaperFulltextLimit } from '../src/ai.js';
 
 const paper = {
   id: 'p1',
@@ -102,8 +102,8 @@ describe('buildChatSystem', () => {
     assert.ok(sys.includes('FULLTEXT-MARKER'));
   });
 
-  it('paper block keeps the 100k truncation marker', () => {
-    const big = { ...paper, full_text: 'x'.repeat(100001) };
+  it('paper block keeps the truncation marker at the resolved limit', () => {
+    const big = { ...paper, full_text: 'x'.repeat(resolvePaperFulltextLimit() + 1) };
     const block = buildPaperBlock(big);
     assert.ok(block.endsWith('[全文已截斷]'));
   });

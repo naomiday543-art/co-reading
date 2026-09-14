@@ -243,10 +243,34 @@ async function makeRequest(config, params) {
   if (!response.ok) {
     let errorText = '';
     try { errorText = await response.text(); } catch {}
-    throw new Error(`API error ${response.status}: ${errorText.slice(0, 200)}`);
+    const err = new Error(`API error ${response.status}: ${errorText.slice(0, 200)}`);
+    // 「超過窗口」那一句要說得出「送出約 N 字」——只有這裡拿得到整包 params。
+    // 只在 4xx 量（happy path 一個字都不多算），量的是純文字長度不是 JSON body
+    // （body 可能夾著 base64 PDF，那個數字對「論文太長」毫無意義）。
+    if (response.status >= 400 && response.status < 500) err.sentChars = promptChars(params);
+    throw err;
   }
 
   return response;
+}
+
+/**
+ * 送出去的純文字字數（system 訊息也在 messages 裡，兩種 wire format 都是）。
+ * 圖片／PDF 等二進位 part 不計——那不是「論文太長」的分子。
+ */
+function promptChars(params) {
+  let n = 0;
+  for (const message of params?.messages || []) {
+    const content = message?.content;
+    if (typeof content === 'string') n += content.length;
+    else if (Array.isArray(content)) {
+      for (const part of content) {
+        if (typeof part === 'string') n += part.length;
+        else if (typeof part?.text === 'string') n += part.text.length;
+      }
+    }
+  }
+  return n;
 }
 
 /**
@@ -649,9 +673,38 @@ export function resolveChatStreamUsage() {
   return !['0', 'false', 'off', 'no'].includes(`${raw}`.trim().toLowerCase());
 }
 
+/** 報告 11 §3 實測：她這批中英混排的論文約 3.85 字／token。只用來把字數換算成人看的 token 估值。 */
+export const CHARS_PER_TOKEN = 3.85;
+
+/**
+ * 送進模型的論文全文上限（字元）。通讀與討論共用同一個值。
+ *
+ * 預設 250,000（工單 13 §3.1）——舊值 100,000 把她八篇裡的四篇截掉尾巴，最長那篇
+ * 146,545 字有三分之一 AI 從來沒看過。250,000 字 ≈ 65,000 token，對 128k 窗口的模型
+ * 仍留得下輸出與歷史；窗口更小的線就把 `PAPER_FULLTEXT_LIMIT_CHARS` 調低。
+ * 每次呼叫都重讀 env（改 .env 重啟即生效，測試也不必重新 import）。
+ * 空／非數字 → 預設；其餘 clamp 到 [20,000, 2,000,000]。
+ */
+export function resolvePaperFulltextLimit() {
+  const raw = process.env.PAPER_FULLTEXT_LIMIT_CHARS;
+  if (raw === undefined || raw === null || `${raw}`.trim() === '') return 250_000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 250_000;
+  return clampNumber(n, { min: 20_000, max: 2_000_000, fallback: 250_000 });
+}
+
 function httpStatusOf(message) {
   const m = /^API error (\d{3})\b/.exec(message || '');
   return m ? Number(m[1]) : null;
+}
+
+/**
+ * 「送太長了」的 4xx。上限放寬（工單 13 §3.1）之後這變成一種真的會發生的失敗：
+ * 250,000 字對窗口小的線塞不下，而上游回的是一句英文 `maximum context length exceeded`。
+ * 認出它才能給她一句能照做的話（調哪個旋鈕），而不是「請檢查 base URL／API key」。
+ */
+function isContextOverflow(message) {
+  return /context|length|too long|maximum/i.test(message || '');
 }
 
 function isConnectionFailure(err) {
@@ -663,7 +716,7 @@ function isConnectionFailure(err) {
 
 /**
  * 把一次通讀失敗歸成一類，給日誌與「該不該重試」共用。
- * @returns {'idle'|'timeout'|'conn'|'output'|`http${number}`|'other'}
+ * @returns {'idle'|'timeout'|'conn'|'output'|'ctx_overflow'|`http${number}`|'other'}
  */
 export function analyzeErrorKind(err) {
   if (err instanceof StreamInterruptedError) return err.kind;
@@ -672,7 +725,12 @@ export function analyzeErrorKind(err) {
   if (/摘要格式不正確|摘要無法解析為 JSON|輸出預算用盡/.test(message)) return 'output';
   if (/AI 請求超時/.test(message)) return 'timeout';
   const status = httpStatusOf(message);
-  if (status) return `http${status}`;
+  if (status) {
+    // 4xx ＋「context／length／too long／maximum」＝ 送出去的東西超過窗口。
+    // 這一類重打一定再錯一次（送的是同一份），所以不進重試名單（見 isRetryableAnalyzeError）。
+    if (status >= 400 && status < 500 && isContextOverflow(message)) return 'ctx_overflow';
+    return `http${status}`;
+  }
   if (isConnectionFailure(err)) return 'conn';
   return 'other';
 }
@@ -695,7 +753,7 @@ export function isRetryableAnalyzeError(err) {
  * 既有的「格式不正確」「輸出預算用盡」「上次通讀被服務重啟打斷」保留原文。
  */
 export function describeAnalyzeError(err) {
-  return describeUpstreamError(err, '通讀模型');
+  return describeUpstreamError(err, '通讀模型', '重新通讀');
 }
 
 /**
@@ -703,13 +761,23 @@ export function describeAnalyzeError(err) {
  * 停滯／逾時那兩句本來就帶「已收到 N 字」，原樣沿用。
  */
 export function describeChatError(err) {
-  return describeUpstreamError(err, '討論模型');
+  return describeUpstreamError(err, '討論模型', '重新提問');
 }
 
-function describeUpstreamError(err, lineLabel) {
+function describeUpstreamError(err, lineLabel, retryVerb = '重試') {
   const message = `${err?.message || '未知錯誤'}`;
   const kind = analyzeErrorKind(err);
   if (kind === 'idle' || kind === 'timeout') return message; // 這兩句本來就是人話
+  if (kind === 'ctx_overflow') {
+    // sentChars 由 makeRequest 在 4xx 當下量出來（system ＋ messages 的純文字長度）。
+    // 拿不到就不要瞎編一個數字，只說該調哪顆旋鈕。
+    const sent = Number(err?.sentChars);
+    const size = Number.isFinite(sent) && sent > 0
+      ? `（送出約 ${formatCount(sent)} 字≈${formatCount(Math.round(sent / CHARS_PER_TOKEN))} token）`
+      : '';
+    return `論文太長，超過模型窗口${size}。把 .env 的 PAPER_FULLTEXT_LIMIT_CHARS `
+      + `調低（目前 ${formatCount(resolvePaperFulltextLimit())}）再${retryVerb}`;
+  }
   if (kind === 'conn') {
     const code = err?.cause?.code || err?.code;
     const detail = `${message}${code ? ` / ${code}` : ''}`.slice(0, 80);
@@ -808,7 +876,7 @@ export function extractAnalyzeJson(config, data) {
 }
 
 async function buildAnalyzeUserContent(config, fullText, pdfPath) {
-  const text = fullText.length > 100000 ? `${fullText.slice(0, 100000)}\n[全文已截斷]` : fullText;
+  const text = clipFullText(fullText);
   if (!pdfPath || !isVisionEnabled(config)) return text;
 
   if (config.format === 'anthropic') {
@@ -969,19 +1037,20 @@ function elapsedSeconds(startedAt, endedAt) {
 }
 
 /**
- * 討論用的論文全文上限。超過這裡就截斷並附「[全文已截斷]」。
+ * 全文 → 送進模型的那份文字：超過上限就截斷並附「[全文已截斷]」。
  *
- * 從 `buildPaperBlock` 裡提出來變成常數，是為了讓 `GET /api/papers/:id` 能用**同一個**
- * 數字回報 `full_text_truncated`（工單 12 §3.5）——UI 上那句「AI 只讀前 100,000 字」
- * 與實際截斷點必須是同一件事，不能各寫一個 100000 各自漂移。截斷邏輯本身沒動。
+ * 通讀（`buildAnalyzeUserContent`）與討論（`buildPaperBlock`）共用這一個函式，
+ * `GET /api/papers/:id` 的 `full_text_truncated` 也用同一顆 `resolvePaperFulltextLimit()`
+ * ——UI 上那句「AI 只讀前 N 字」與實際截斷點必須是同一件事，不能各寫一個數字各自漂移。
  */
-export const PAPER_FULLTEXT_LIMIT = 100_000;
+export function clipFullText(fullText, limit = resolvePaperFulltextLimit()) {
+  const text = `${fullText ?? ''}`;
+  return text.length > limit ? `${text.slice(0, limit)}\n[全文已截斷]` : text;
+}
 
 // 論文區塊：標題/作者/年份/AI 摘要/全文。措辭逐字沿用工單 05 之前的 stableSystem，只是拿掉了身份句。
 export function buildPaperBlock(paper) {
-  const fullText = paper.full_text.length > PAPER_FULLTEXT_LIMIT
-    ? paper.full_text.slice(0, PAPER_FULLTEXT_LIMIT) + '\n[全文已截斷]'
-    : paper.full_text;
+  const fullText = clipFullText(paper.full_text);
 
   return `以下是這篇論文的信息：
 標題：${paper.title}
