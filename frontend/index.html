@@ -266,9 +266,55 @@
         cursor: pointer;
       }
       .cr-quote-block:hover { background: color-mix(in srgb, var(--surface) 85%, transparent); color: var(--text); }
+      /* 跳到某一則訊息時那顆氣泡的閃一下（工單 18 §2 A2，與 cr-quote-flash 同一套） */
+      .cr-msg-flash {
+        background: var(--accent-soft);
+        border-radius: 10px;
+        box-shadow: 0 0 0 6px var(--accent-soft);
+        transition: background 0.4s ease, box-shadow 0.4s ease;
+      }
+
+      /* ===== 洞察浮現卡（工單 18 §2 A2）===== */
+      .cr-insight-pop-backdrop {
+        position: fixed; inset: 0; z-index: 60;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(0, 0, 0, 0.4); padding: 16px;
+      }
+      .cr-insight-pop {
+        width: 100%; max-width: 560px; max-height: 86vh; overflow-y: auto;
+        background: var(--surface); border: 1px solid var(--border-soft);
+        border-radius: 16px; box-shadow: var(--shadow-lg); padding: 18px 20px;
+        animation: cr-insight-pop-in 0.14s ease-out;
+      }
+      @keyframes cr-insight-pop-in { from { opacity: 0; transform: translateY(6px) scale(0.99); } to { opacity: 1; transform: none; } }
+      .cr-insight-pop-q, .cr-insight-pop-a {
+        padding: 8px 10px; border-radius: 10px;
+        background: var(--surface-alt); border-left: 3px solid var(--border);
+      }
+      .cr-insight-pop-q { border-left-color: var(--accent); }
+      .cr-insight-pop-link {
+        display: block; width: 100%; text-align: left;
+        padding: 8px 10px; border-radius: 10px;
+        background: var(--surface-alt); border: 1px solid var(--border-soft);
+        cursor: pointer;
+      }
+      .cr-insight-pop-link:hover { background: var(--surface-hover); }
+      /* 窄螢幕：改成貼底的抽屜 */
+      @media (max-width: 767px) {
+        .cr-insight-pop-backdrop { align-items: flex-end; padding: 0; }
+        .cr-insight-pop {
+          max-width: none; max-height: 88vh;
+          border-radius: 18px 18px 0 0; padding: 16px 16px 84px;
+          animation: cr-insight-sheet-in 0.16s ease-out;
+        }
+        @keyframes cr-insight-sheet-in { from { transform: translateY(14px); opacity: 0; } to { transform: none; opacity: 1; } }
+      }
+
       @media (prefers-reduced-motion: reduce) {
         .cr-ask-selection { animation: none; }
         .cr-quote-flash { transition: none; }
+        .cr-msg-flash { transition: none; }
+        .cr-insight-pop { animation: none; }
       }
 
       /* ===== Responsive: <=767px collapses to the mobile form ===== */

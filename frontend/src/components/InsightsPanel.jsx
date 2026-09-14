@@ -3,15 +3,19 @@ import { useStore } from '../store';
 import { insightsApi } from '../api';
 import InsightCard from './InsightCard';
 import InsightForm from './InsightForm';
+import InsightPopover from './InsightPopover';
 
 const DIMENSIONS = ['全部', '概念', '延伸', '你的研究', '闪回', '共振', '悬题'];
 
 export default function InsightsPanel({ onNavigate }) {
   const { insights, setInsights, selectedInsightDimension, setSelectedInsightDimension, papers } = useStore();
+  const requestMessageJump = useStore(s => s.requestMessageJump);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [error, setError] = useState('');
+  // 工單 18 §2 A2：點卡片不再直接跳論文頁，先浮出這張卡
+  const [popoverId, setPopoverId] = useState(null);
 
   const loadInsights = async () => {
     try {
@@ -105,16 +109,37 @@ export default function InsightsPanel({ onNavigate }) {
             <InsightCard
               key={ins.id}
               insight={ins}
-              onClick={(insight) => {
-                if (insight.source_paper_id) {
-                  onNavigate('detail', insight.source_paper_id);
-                }
-              }}
+              onClick={(insight) => setPopoverId(insight.id)}
               onEdit={handleEdit}
               onDelete={handleDelete}
             />
           ))}
         </div>
+      )}
+
+      {/* 洞察浮現卡（工單 18 §2 A2）*/}
+      {popoverId && (
+        <InsightPopover
+          insightId={popoverId}
+          onClose={() => setPopoverId(null)}
+          onGoChat={(paperId, messageId) => {
+            // 先發訊號再換頁：ChatPanel 掛載、訊息載好之後才消化得到（store 註解）
+            requestMessageJump(messageId);
+            setPopoverId(null);
+            onNavigate('detail', paperId);
+          }}
+          onGoPaper={(paperId) => {
+            setPopoverId(null);
+            onNavigate('detail', paperId);
+          }}
+          onEdit={(insight) => { setPopoverId(null); handleEdit(insight); }}
+          onDelete={async (id) => {
+            if (!confirm('確定要刪除這條洞察嗎？')) return;
+            await insightsApi.delete(id);
+            setPopoverId(null);
+            loadInsights();
+          }}
+        />
       )}
 
       {/* Form modal */}

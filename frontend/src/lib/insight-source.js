@@ -1,4 +1,58 @@
-// 工單 18：洞察來源（§2 A1／A2）的前端純函式層。
+// 工單 18 §2 A2／B3：洞察浮現卡的純函式層。
+//
+// 抽出來的三件事都是「規則」不是「畫面」，所以測得到、也不用假 DOM：
+//   ① 來源區塊的三態（有那一問一答／只有 source_context／什麼都沒有）；
+//   ② 分數的三檔文字（她不需要看到 0.58 這種數字）；
+//   ③ 一路點下去的歷史堆疊上限 10。
+
+/** 浮現卡中段 assistant 回覆先顯示多少字（可展開全文）。 */
+export const SOURCE_EXCERPT_CHARS = 300;
+
+/** 一路點相關洞察最多記幾層（§2 B3）。 */
+export const HISTORY_MAX = 10;
+
+/**
+ * 來源區塊要顯示什麼。
+ * @param {object} detail `GET /api/insights/:id` 的回應
+ * @returns {{kind:'conversation'|'context'|'none', question:?object, answer:?object, context:string}}
+ */
+export function describeSourceBlock(detail) {
+  const answer = detail?.source_message || null;
+  const question = detail?.source_question || null;
+  if (answer && (answer.content || '').trim()) {
+    return { kind: 'conversation', question, answer, context: '' };
+  }
+  const context = (detail?.source_context || '').trim();
+  if (context) return { kind: 'context', question: null, answer: null, context };
+  return { kind: 'none', question: null, answer: null, context: '' };
+}
+
+/** 摘錄：超過 `SOURCE_EXCERPT_CHARS` 才需要「展開全文」。 */
+export function excerpt(text, chars = SOURCE_EXCERPT_CHARS) {
+  const full = String(text || '');
+  if (full.length <= chars) return { text: full, truncated: false };
+  return { text: `${full.slice(0, chars)}…`, truncated: true };
+}
+
+/**
+ * 往歷史堆疊推一張卡。超過 `HISTORY_MAX` 從最舊的那端丟。
+ * 同一個 id 連點兩下不重複推（不然「←」要按兩次才動）。
+ */
+export function pushHistory(stack, id, max = HISTORY_MAX) {
+  const prev = Array.isArray(stack) ? stack : [];
+  if (!id) return prev;
+  if (prev.length > 0 && prev[prev.length - 1] === id) return prev;
+  const next = [...prev, id];
+  return next.length > max ? next.slice(next.length - max) : next;
+}
+
+/** 「←」：回上一張，回傳 `{ stack, id }`；沒得回時 id 為 null。 */
+export function popHistory(stack) {
+  const prev = Array.isArray(stack) ? stack : [];
+  if (prev.length === 0) return { stack: prev, id: null };
+  const next = prev.slice(0, -1);
+  return { stack: next, id: prev[prev.length - 1] };
+}
 
 /**
  * 「存為洞察」按下去的那一則 assistant，它是在回答哪一則 user（工單 18 §2 A1）。

@@ -3,7 +3,7 @@ import { nanoid } from 'nanoid';
 import db from '../db.js';
 import { log } from '../logger.js';
 import { findRelatedInsights } from '../search.js';
-import { resolveSourceMessageId, backfillInsightSources } from '../insightSource.js';
+import { resolveSourceMessageId, loadSourceConversation, backfillInsightSources } from '../insightSource.js';
 
 const router = Router();
 
@@ -82,10 +82,17 @@ router.get('/insights/:id', (req, res) => {
   if (!insight) return res.status(404).json({ error: '洞察不存在' });
 
   const paper = db.prepare('SELECT id, title FROM papers WHERE id = ?').get(insight.source_paper_id);
+
+  // 工單 18 §2 A2：浮現卡中段要的「那一問一答」一次拿齊，前端不用再打第二趟。
+  const { source_message, source_question } = loadSourceConversation(insight);
+
   res.json({
     ...insight,
     tags_json: JSON.parse(insight.tags_json || '[]'),
+    source_message_id: insight.source_message_id || '',
     source_paper_title: paper?.title || null,
+    source_message,
+    source_question,
   });
 });
 
