@@ -4,7 +4,7 @@ import { nanoid } from 'nanoid';
 import { join } from 'path';
 import { unlinkSync, existsSync } from 'fs';
 import db from '../db.js';
-import { extractPDFDetailed, inspectPDF, describePages, buildTextMeta, parseTextMeta } from '../pdf.js';
+import { extractPDFDetailed, inspectPDF, describePages, buildTextMeta, parseTextMeta, TEXT_META_VERSION } from '../pdf.js';
 import { analyzePaper, resolvePaperFulltextLimit } from '../ai.js';
 import { log } from '../logger.js';
 import { extractInsights } from '../memory.js';
@@ -91,7 +91,8 @@ function saveTextMeta(paperId, fullText, pageMeta = []) {
     const meta = buildTextMeta(fullText, pageMeta);
     db.prepare('UPDATE papers SET text_meta = ? WHERE id = ?').run(JSON.stringify(meta), paperId);
     const refs = meta.references;
-    log('INFO', `[TEXTMETA] paper=${paperId} refs_cut=${refs.cut}`
+    log('INFO', `[TEXTMETA] paper=${paperId} v=${meta.version} refs_cut=${refs.cut}`
+      + ` blocks=${refs.blocks.length} chars_total=${refs.chars_total.toLocaleString('en-US')}`
       + ` reason=${refs.reason} start=${refs.start} chars=${refs.chars}`
       + ` density=${refs.density}/1000 pages=${meta.pages.length}`
       + ` bad_pages=${meta.bad_pages.length > 0 ? meta.bad_pages.join(',') : 'none'}`);
@@ -103,14 +104,20 @@ function saveTextMeta(paperId, fullText, pageMeta = []) {
 }
 
 /**
- * 讀 `text_meta`，沒有就當場算一次並回寫（既有論文的補算路徑，工單 13 §3.2）。
- * 只補參考文獻那半——頁級品質要重新解析 PDF，那條路走 `POST /:id/text-meta/rebuild`。
+ * 讀 `text_meta`，沒有**或版本落後**就當場重算並回寫
+ *（既有論文的補算路徑，工單 13 §3.2；版本升級自動重算，工單 16 §3.3）。
+ *
+ * 只重算參考文獻那半——頁級品質要重新解析 PDF（慢、而且偵測規則沒改），所以**沿用舊值**；
+ * 沒有舊值就留空，那條路走 `POST /:id/text-meta/rebuild`。
+ * 她那篇 Nature 版式的 Cholesterol 就是靠這條路徑在下次打開時自動吃到 40.6% 那塊。
  */
 function ensureTextMeta(paper, paperId) {
   const existing = parseTextMeta(paper.text_meta);
-  if (existing) return existing;
-  if (!paper.full_text) return null;
-  return saveTextMeta(paperId, paper.full_text);
+  if (existing && Number(existing.version) >= TEXT_META_VERSION) return existing;
+  if (!paper.full_text) return existing ?? null;
+
+  const pageMeta = Array.isArray(existing?.pages) ? existing.pages : [];
+  return saveTextMeta(paperId, paper.full_text, pageMeta) ?? existing ?? null;
 }
 
 /**
@@ -259,7 +266,8 @@ router.get('/:id', (req, res) => {
   // 截斷邏輯在 clipFullText，這裡只是報告同一個判斷（工單 13 §3.1 起上限可調）。
   const fullTextChars = paper.full_text?.length || 0;
   const limit = resolvePaperFulltextLimit();
-  // text_meta 是 lazy 的：舊論文（上傳時還沒有這個欄位）第一次被打開時補算並回寫。
+  // text_meta 是 lazy 的：舊論文（沒有這個欄位、或版本落後於 TEXT_META_VERSION）
+  // 被打開時補算／重算並回寫（工單 16 §3.3：偵測規則升級不必她手動 rebuild）。
   const textMeta = ensureTextMeta(paper, paper.id);
 
   res.json({
