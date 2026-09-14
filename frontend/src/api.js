@@ -127,13 +127,23 @@ export async function readSSEStream(response, { onDelta, onDone, onError, onThin
 
 // `signal`：她按「停止」時中止這條 fetch。連線一斷，後端 `res` 的 'close' 就會把上游
 // 那條也收掉（工單 12 §3.4②），不會留一個沒人看的生成繼續燒。
-export function streamChat(paperId, message, { onDelta, onDone, onError, onThinking, signal }) {
+// `quote`（工單 14）：`{text,start,end}`，start/end 是 `paper.full_text` 的字元偏移。
+// 後端會驗 `full_text.slice(start,end) === text`，對不上直接 400——所以這裡**不要**
+// 自己改寫 text（例如 trim／去換行），一律照 lib/fulltext-offsets.js 切出來的送。
+export function streamChat(paperId, message, { onDelta, onDone, onError, onThinking, signal, quote } = {}) {
   return fetch(`${API}/api/papers/${paperId}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify(quote ? { message, quote } : { message }),
     signal,
-  }).then(response => readSSEStream(response, { onDelta, onDone, onError, onThinking }));
+  }).then(async (response) => {
+    // 400（引用對不上原文／太長）不是 SSE，是一顆 JSON——直接翻成錯誤，別當串流讀。
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || `HTTP ${response.status}`);
+    }
+    return readSSEStream(response, { onDelta, onDone, onError, onThinking });
+  });
 }
 
 export function regenerateChat(paperId, { onDelta, onDone, onError, onThinking, signal }) {
