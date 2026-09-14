@@ -414,9 +414,6 @@ POST /api/papers/:id/chat {message}
         {text: constitution, cache_control: ephemeral},  // 憲章（constitution.js），永遠最前
         {text: paperBlock,   cache_control: ephemeral},  // 論文資訊+全文（已切參考文獻、
                                                         // 有壞頁時附抽字品質提示），命中 cache
-        {text: insightText},                              // 注入的洞察/續窗，每輪變化
-
-        {text: paperBlock,   cache_control: ephemeral},  // 論文資訊+全文，命中 cache
         {text: insightText},                              // 注入的洞察/續窗/選段脈絡，每輪變化      ]
       → SSE 流式回覆
   → 流結束後 INSERT assistant message
