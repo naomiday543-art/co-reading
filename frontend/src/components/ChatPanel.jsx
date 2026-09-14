@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { streamChat, regenerateChat, continueChat, papersApi } from '../api';
 import { useStore, CHAT_FONT_PX, CHAT_FONT_LABELS, nextChatFontSize, thinkingLabel } from '../store';
+import { formatRange, quotePreview } from '../lib/fulltext-offsets';
 import CarryoverPanel from './CarryoverPanel';
 
 export function switchVersion(messages, messageId, direction) {
@@ -44,6 +45,12 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
   const [, setTick] = useState(0);          // 只為了讓秒數每 500ms 重畫
   const [streamNote, setStreamNote] = useState(''); // '' | 'stopped' | 'incomplete'
   const [errorHint, setErrorHint] = useState('');
+  // 工單 14 §3.3：她按了「問這段」之後、還沒送出的那段引用（住在 store，因為來源是
+  // 另一個面板的 FullTextView）。展開的引用塊則是每個氣泡各自記。
+  const pendingQuote = useStore(s => s.pendingQuote);
+  const clearPendingQuote = useStore(s => s.clearPendingQuote);
+  const requestQuoteJump = useStore(s => s.requestQuoteJump);
+  const [expandedQuote, setExpandedQuote] = useState(null);
   const abortRef = useRef(null);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
@@ -77,6 +84,11 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
 
   // 換論文／卸載時把還在跑的那條收掉，免得回來時舊串流還在往新畫面寫字。
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // 選段一進來就把游標放進輸入框——她的下一個動作一定是打問題（或直接 Enter）
+  useEffect(() => {
+    if (pendingQuote) inputRef.current?.focus();
+  }, [pendingQuote]);
 
   const loadMessages = async () => {
     try {
@@ -140,14 +152,17 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
   const handleStop = () => abortRef.current?.abort();
 
   const handleSend = async () => {
-    if (!input.trim() || streaming) return;
+    // 只選了一段、一個字都沒打也算數（後端會用預設問題，工單 14 §3.2）
+    if ((!input.trim() && !pendingQuote) || streaming) return;
     const userMsg = input.trim();
+    const quote = pendingQuote;
     setInput('');
+    clearPendingQuote();
 
-    const tempUser = { id: 'temp', role: 'user', content: userMsg, created_at: Date.now() };
+    const tempUser = { id: 'temp', role: 'user', content: userMsg, created_at: Date.now(), quote };
     setMessages(prev => [...prev, tempUser]);
 
-    await runStream(opts => streamChat(paperId, userMsg, opts));
+    await runStream(opts => streamChat(paperId, userMsg, { ...opts, quote }));
   };
 
   const handleRegenerate = async () => {
@@ -388,7 +403,50 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
                 </div>
               ) : (
                 <div>
-                  <p className="whitespace-pre-wrap">{msg.content}</p>
+                  {/* 工單 14 §3.3：帶引用的提問，氣泡上方縮起一塊原文；點一下展開／收起，
+                      點「跳回原文」回到閱讀模式那個位置 */}
+                  {msg.quote && (
+                    <div
+                      className="cr-quote-block"
+                      role="button"
+                      tabIndex={0}
+                      title="點一下展開；「跳回原文」回到閱讀模式該位置"
+                      onClick={() => setExpandedQuote(expandedQuote === msg.id ? null : msg.id)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setExpandedQuote(expandedQuote === msg.id ? null : msg.id);
+                        }
+                      }}
+                    >
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <span className="cr-mono text-[10px] opacity-70">
+                          引用原文 · {formatRange(msg.quote)}
+                        </span>
+                        <span
+                          className="text-[10px] underline decoration-dotted opacity-80 hover:opacity-100"
+                          role="button"
+                          tabIndex={0}
+                          onClick={e => { e.stopPropagation(); requestQuoteJump(msg.quote); }}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              requestQuoteJump(msg.quote);
+                            }
+                          }}
+                        >
+                          跳回原文
+                        </span>
+                      </div>
+                      <span className="whitespace-pre-wrap">
+                        {expandedQuote === msg.id ? msg.quote.text : quotePreview(msg.quote.text)}
+                      </span>
+                    </div>
+                  )}
+                  {msg.content
+                    ? <p className="whitespace-pre-wrap">{msg.content}</p>
+                    : <p className="text-[11.5px] text-muted italic">（沒有另外打字，請 AI 直接解釋這段）</p>}
                   {msg.edited ? (
                     <span className="text-[10px] text-muted ml-1">(已編輯)</span>
                   ) : null}
@@ -486,12 +544,33 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
 
       {/* Input */}
       <div className="shrink-0 space-y-1.5">
+        {/* 引用卡（工單 14 §3.3）：她在閱讀模式選了一段按「問這段」之後停在這裡，
+            ✕ 取消。送出時跟著走，DB 裡另存 quote 欄，不混進她打的字。 */}
+        {pendingQuote && (
+          <div className="cr-quote-card">
+            <div className="cr-quote-card-text">
+              <div className="cr-mono text-[10px] opacity-70 mb-0.5">
+                引用原文 · {formatRange(pendingQuote)}
+              </div>
+              {quotePreview(pendingQuote.text)}
+            </div>
+            <button
+              className="cr-quote-card-x"
+              onClick={clearPendingQuote}
+              title="取消引用"
+            >
+              ✕
+            </button>
+          </div>
+        )}
         <div className="flex gap-2">
           <textarea
             ref={inputRef}
             className="cr-chat-input flex-1 border border-border bg-surface rounded-2xl px-4 py-2.5 resize-none shadow-sm focus:outline-none focus:border-accent"
             rows={2}
-            placeholder="追問，或貼上一段原文一起讀…（Enter 送出，Shift+Enter 換行）"
+            placeholder={pendingQuote
+              ? '想問這段什麼？直接 Enter 就讓 AI 解釋這一段'
+              : '追問，或貼上一段原文一起讀…（Enter 送出，Shift+Enter 換行）'}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -510,7 +589,7 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
             <button
               className="px-4 py-2 bg-accent text-accent-fg rounded-xl text-sm font-medium hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
               onClick={handleSend}
-              disabled={!input.trim()}
+              disabled={!input.trim() && !pendingQuote}
             >
               送出
             </button>

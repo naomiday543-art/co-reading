@@ -8,6 +8,7 @@ import { renderCarryoverForInjection } from './carryover.js';
 import { opencodeSessionHeaders } from './opencodeSession.js';
 import { loadConstitution } from './constitution.js';
 import { buildDirectionsContext, renderDirectionsBlock } from './directions.js';
+import { buildQuoteContextBlock, parseQuote, quoteLogLabel } from './quote.js';
 
 function resolveConfig(prefix) {
   const dbSettings = getSettings();
@@ -1212,6 +1213,8 @@ function cacheHitOf(usage) {
  * @param {object} [options]
  * @param {(text: string) => void} [options.onReasoning] 思考鏈 delta（只用來算字數，內容不外流）
  * @param {AbortSignal} [options.signal] 她按「停止」／關頁面時用來收掉上游那條連線
+ * @param {{text: string, start: number, end: number}} [options.quote] 這一輪引用的原文選段（工單 14）
+ *        ——只用來在**變動區**補一段位置脈絡；選段本身走 `userMessage`，絕不進穩定前綴
  * @param {number} [options.idleTimeoutMs] 覆蓋閒置逾時（預設讀 CHAT_IDLE_TIMEOUT_MS）
  * @param {number} [options.timeoutMs] 覆蓋單次請求總逾時
  * @param {number} [options.retries] 覆蓋重試次數（預設讀 CHAT_RETRIES）
@@ -1231,6 +1234,13 @@ export async function chatAboutPaper(paper, history, userMessage, onChunk, optio
     directionsBlock: directions.block,
   });
 
+  // 工單 14 §3.2：這一輪的選段（自己送的，或重新生成／繼續時沿用上一則 user 的）。
+  const quote = parseQuote(options.quote);
+  // `options.quote.question` 是她自己打的那句（沒存進 DB 的 quote JSON，只是傳參）。
+  const insightQuery = quote
+    ? ((options.quote?.question || '').trim() || quote.text.slice(0, 200))
+    : userMessage;
+
   // Variable part: injected insights — changes per-turn, not cached
   let insightText = '';
 
@@ -1248,7 +1258,9 @@ export async function chatAboutPaper(paper, history, userMessage, onChunk, optio
     }
 
     // Cross-paper related insights via FTS5 trigram search
-    const related = searchInsights(userMessage, { excludePaperId: paper.id, limit: 3 });
+    // 引用那一輪的 `userMessage` 是「引用原文＋問題」整串（可能上千字）——拿它去 FTS
+    // 做 phrase match 等於白跑一趟。有 quote 時改用她自己打的那句（沒打就用選段前 200 字）。
+    const related = searchInsights(insightQuery, { excludePaperId: paper.id, limit: 3 });
 
     if (related.length > 0) {
       const paperTitles = new Map();
@@ -1278,6 +1290,11 @@ export async function chatAboutPaper(paper, history, userMessage, onChunk, optio
   } catch (err) {
     console.error('[CARRYOVER-INJECT] failed:', err.message);
   }
+
+  // 選段的位置脈絡（工單 14 §3.2）：前後各 600 字原文，讓模型知道這句話在哪、承接什麼。
+  // 接在變動區最後——**穩定前綴（憲章＋論文區塊）逐字不變**，不帶 quote 時這裡是空字串，
+  // 送出的 body 與工單 14 之前逐字相同（§5.3 的零回歸線）。
+  if (quote) insightText += buildQuoteContextBlock(paper.full_text, quote);
 
   // Build system: [憲章 block, 論文 block, (變動區)] for anthropic; plain string for openai
   let systemForRequest;
@@ -1311,7 +1328,8 @@ export async function chatAboutPaper(paper, history, userMessage, onChunk, optio
   const streamGen = config.format === 'anthropic' ? streamAnthropic : streamOpenAI;
 
   log('INFO', `[CHAT] start paper=${paper.id} model=${config.model}`
-    + ` sys_chars=${systemChars(systemForRequest)} hist=${history.length}條 scope=${scope}`);
+    + ` sys_chars=${systemChars(systemForRequest)} hist=${history.length}條 scope=${scope}`
+    + ` quote=${quoteLogLabel(quote)}`);
 
   let lastError = null;
   let retriesUsed = 0;

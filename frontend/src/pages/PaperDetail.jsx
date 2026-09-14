@@ -38,6 +38,10 @@ export default function PaperDetail({ paperId, onBack }) {
   const [relatedInsights, setRelatedInsights] = useState([]);
   const [showInsightForm, setShowInsightForm] = useState(false);
   const { tags, tree, papers, setTags, readingMode, setReadingMode } = useStore();
+  // 工單 14 §3.3：選段與跳回原文是跨面板的動作（FullTextView ↔ ChatPanel），
+  // 中間只借 store 這兩顆訊號，兩個元件都不用知道對方存在。
+  const pendingQuote = useStore(s => s.pendingQuote);
+  const quoteJump = useStore(s => s.quoteJump);
 
   // 閱讀模式的聊天抽屜：開合不持久化（每次進論文預設收起），寬度持久化
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -178,6 +182,19 @@ export default function PaperDetail({ paperId, onBack }) {
     setChatUnread(false);
     lastMsgCount.current = null;
   }, [paperId]);
+
+  // 按了「問這段」：閱讀模式下把討論抽屜拉開（分欄模式本來就看得到，不用動）
+  useEffect(() => {
+    if (pendingQuote && readingMode) {
+      setDrawerOpen(true);
+      setChatUnread(false);
+    }
+  }, [pendingQuote, readingMode]);
+
+  // 點氣泡上的引用塊要跳回原文 → 先確保左欄在「原文」而不是摘要（滾動由 FullTextView 做）
+  useEffect(() => {
+    if (quoteJump) setLeftTab('fulltext');
+  }, [quoteJump]);
 
   // 抽屜 fixed 定位要貼在 header 下緣——量一次，別寫死魔術數字
   useEffect(() => {

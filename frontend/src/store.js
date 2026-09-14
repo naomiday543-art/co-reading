@@ -163,6 +163,19 @@ export const useStore = create((set, get) => ({
     set({ chatFontSize: next });
   },
 
+  // ── 選一段問它（工單 14 §3.3）──────────────────────────────────────
+  // `pendingQuote`：她在閱讀模式按了「問這段」、還沒送出的那段引用（`{text,start,end}`）。
+  // `quoteJump`：她點了氣泡上的引用塊，要跳回原文那個位置。
+  // **兩個都不持久化**——這是一次動作，不是偏好；重整就該乾淨。
+  pendingQuote: null,
+  setPendingQuote: (quote) => set({ pendingQuote: quote || null }),
+  clearPendingQuote: () => set({ pendingQuote: null }),
+  quoteJump: null,
+  requestQuoteJump: (quote) => set({
+    quoteJump: quote ? { start: quote.start, end: quote.end, ts: Date.now() } : null,
+  }),
+  clearQuoteJump: () => set({ quoteJump: null }),
+
   searchQuery: '',
   setSearchQuery: (q) => set({ searchQuery: q }),
   sortBy: 'updated',

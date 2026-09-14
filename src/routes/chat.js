@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { nanoid } from 'nanoid';
 import db from '../db.js';
 import { chatAboutPaper, ChatAbortedError } from '../ai.js';
+import { parseQuote, validateQuote, renderQuotedMessage } from '../quote.js';
 import { log } from '../logger.js';
 
 const router = Router();
@@ -34,7 +35,7 @@ function openStream(res) {
  *
  * @returns {{ok: boolean, content: string, aborted: boolean}}
  */
-async function runChatStream(res, { paper, history, userMessage, hint, label = '討論回覆' }) {
+async function runChatStream(res, { paper, history, userMessage, hint, quote = null, label = '討論回覆' }) {
   const controller = new AbortController();
   // 掛 `res` 不是 `req`：Express 讀完 body 之後 `req` 立刻就 'close' 了（Node ≥16 的
   // IncomingMessage 語意），掛在那邊會在打上游之前就自己把自己 abort 掉。
@@ -62,6 +63,8 @@ async function runChatStream(res, { paper, history, userMessage, hint, label = '
       sse(res, { type: 'delta', content: chunk });
     }, {
       signal: controller.signal,
+      // 工單 14 §3.2：選段的位置脈絡由 `chatAboutPaper` 接在變動區（insightText 之後）。
+      quote,
       onReasoning: (text) => {
         reasoningChars += text.length;
         const now = Date.now();
@@ -97,10 +100,39 @@ function nextSeq(paperId) {
   return row.n;
 }
 
-function getHistory(paperId) {
-  return db.prepare(
-    'SELECT role, content FROM messages WHERE paper_id = ? ORDER BY seq ASC'
-  ).all(paperId);
+/**
+ * 給模型的歷史（工單 14 §3.1）。
+ *
+ * 三個入口（送出／重新生成／繼續）都走這一顆，**不要各自 SELECT**：有 quote 的 user
+ * 訊息要在這裡渲染成單一字串，而且用的是跟送出當輪同一顆 `renderQuotedMessage`
+ * ⇒ 同一輪不管回放幾次都逐字相同，cache 前綴才穩（§5.2 的釘子）。
+ * DB 的 `content` 依舊只有她打的字。
+ *
+ * `lastQuote` 是歷史裡最後一則 user 訊息的引用：重新生成／繼續沒有新的 userMessage，
+ * 位置脈絡要從這裡拿，否則同一個問題重答一次就少了上下文。
+ *
+ * @returns {{history: Array<{role: string, content: string}>, lastQuote: object|null}}
+ */
+function loadHistory(paper, { beforeSeq = null } = {}) {
+  const rows = beforeSeq === null
+    ? db.prepare(
+      'SELECT role, content, quote FROM messages WHERE paper_id = ? ORDER BY seq ASC'
+    ).all(paper.id)
+    : db.prepare(
+      'SELECT role, content, quote FROM messages WHERE paper_id = ? AND seq < ? ORDER BY seq ASC'
+    ).all(paper.id, beforeSeq);
+
+  let lastQuote = null;
+  const history = rows.map(m => {
+    if (m.role !== 'user') return { role: m.role, content: m.content };
+    const quote = parseQuote(m.quote);
+    // 最後一則 user 沒引用就是沒有，不沿用更早那次的。`question` 只是傳給 ai.js 當洞察
+    // 搜尋的關鍵字（不進 DB 的 quote JSON、不影響驗證）。
+    lastQuote = quote ? { ...quote, question: m.content } : null;
+    return { role: m.role, content: renderQuotedMessage(quote, m.content, paper.full_text) };
+  });
+
+  return { history, lastQuote };
 }
 
 // POST /api/papers/:id/chat (SSE streaming)
@@ -110,14 +142,23 @@ router.post('/:id/chat', async (req, res) => {
   const paperId = req.params.id;
   const regenerate = req.query.regenerate === 'true';
   const continueChat = req.query.continue === 'true';
-  const { message } = req.body;
-
-  if (!regenerate && !continueChat && (!message || !message.trim())) {
-    return res.status(400).json({ error: '消息不能為空' });
-  }
+  const { message, quote: rawQuote } = req.body;
 
   const paper = db.prepare('SELECT * FROM papers WHERE id = ?').get(paperId);
   if (!paper) return res.status(404).json({ error: '論文不存在' });
+
+  // 工單 14 §3.1：只選了一段、沒打字也算數（用預設問題）——所以「空」的判斷要在驗過
+  // quote 之後。驗不過一律 400，不寫 DB、不打上游。
+  let quote = null;
+  if (!regenerate && !continueChat && rawQuote !== undefined && rawQuote !== null && rawQuote !== '') {
+    const verdict = validateQuote(paper.full_text, rawQuote);
+    if (!verdict.ok) return res.status(400).json({ error: verdict.error });
+    quote = verdict.quote;
+  }
+
+  if (!regenerate && !continueChat && !quote && (!message || !message.trim())) {
+    return res.status(400).json({ error: '消息不能為空' });
+  }
 
   // ── Regenerate mode ──
   if (regenerate) {
@@ -149,12 +190,14 @@ router.post('/:id/chat', async (req, res) => {
     }
 
     // History = everything BEFORE the last AI message
-    const history = allMsgs.filter(m => m.seq < lastAI.seq).map(m => ({ role: m.role, content: m.content }));
+    const { history, lastQuote } = loadHistory(paper, { beforeSeq: lastAI.seq });
 
     // Set up SSE
     openStream(res);
 
-    const outcome = await runChatStream(res, { paper, history, userMessage: null, label: '重新生成' });
+    const outcome = await runChatStream(res, {
+      paper, history, userMessage: null, quote: lastQuote, label: '重新生成',
+    });
 
     if (outcome.ok) {
       const newVersionId = nanoid();
@@ -179,17 +222,17 @@ router.post('/:id/chat', async (req, res) => {
 
   // ── Default: normal send ──
   // Save user message
+  const typed = (message || '').trim();
   const userMsgId = nanoid();
   const userSeq = nextSeq(paperId);
   db.prepare(
-    'INSERT INTO messages (id, paper_id, role, content, created_at, seq) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(userMsgId, paperId, 'user', message.trim(), Date.now(), userSeq);
-  log('INFO', `討論消息: ${paperId}, user (${message.length} 字)`);
+    'INSERT INTO messages (id, paper_id, role, content, created_at, seq, quote) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(userMsgId, paperId, 'user', typed, Date.now(), userSeq, quote ? JSON.stringify(quote) : '');
+  log('INFO', `討論消息: ${paperId}, user (${typed.length} 字`
+    + `${quote ? `, 引用 ${quote.end - quote.start} 字` : ''})`);
 
   // Get history (without the just-saved user message, to avoid duplicates in the prompt)
-  const history = db.prepare(
-    'SELECT role, content FROM messages WHERE paper_id = ? ORDER BY seq ASC'
-  ).all(paperId);
+  const { history } = loadHistory(paper, { beforeSeq: userSeq });
 
   // Set up SSE
   openStream(res);
@@ -198,8 +241,10 @@ router.post('/:id/chat', async (req, res) => {
   // 一條孤兒 user 尾巴，所以 error 事件要告訴她怎麼救回來。
   const outcome = await runChatStream(res, {
     paper,
-    history: history.slice(0, -1),
-    userMessage: message.trim(),
+    history,
+    // 送模型的是「引用＋問題」渲染後的整串；DB 裡那一列仍然只有 `typed`（§4 紅線）。
+    userMessage: renderQuotedMessage(quote, typed, paper.full_text),
+    quote: quote ? { ...quote, question: typed } : null,
     hint: '你的問題已保存——按「重新生成」或「繼續」都能讓 AI 接著回答',
   });
 
@@ -223,11 +268,13 @@ router.post('/:id/chat', async (req, res) => {
  * 編輯訊息後自動觸發，也是孤兒 user 尾巴的救援路徑（見上面 regenerate 的放寬）。
  */
 async function runContinue(res, { paper, paperId }) {
-  const history = getHistory(paperId);
+  const { history, lastQuote } = loadHistory(paper);
 
   openStream(res);
 
-  const outcome = await runChatStream(res, { paper, history, userMessage: null, label: '繼續回覆' });
+  const outcome = await runChatStream(res, {
+    paper, history, userMessage: null, quote: lastQuote, label: '繼續回覆',
+  });
 
   if (outcome.ok) {
     const assistantMsgId = nanoid();
@@ -275,6 +322,7 @@ router.post('/:id/chat/edit', (req, res) => {
     regen_idx: m.regen_idx,
     edited: m.edited,
     edit_branches: m.edit_branches ? JSON.parse(m.edit_branches) : null,
+    quote: m.quote || '',                    // 工單 14：分支往返不能把引用弄丟
   })));
 
   if (tailJson.length > 1_000_000) {
@@ -355,6 +403,7 @@ router.post('/:id/chat/branch/switch', (req, res) => {
       regen_idx: m.regen_idx,
       edited: m.edited,
       edit_branches: m.edit_branches ? JSON.parse(m.edit_branches) : null,
+      quote: m.quote || '',
     })));
 
     db.prepare(
@@ -366,7 +415,7 @@ router.post('/:id/chat/branch/switch', (req, res) => {
 
     // 3. Insert tail messages from the branch
     const insertStmt = db.prepare(
-      'INSERT INTO messages (id, paper_id, role, content, created_at, seq, regen_versions, regen_idx, edited, edit_branches) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO messages (id, paper_id, role, content, created_at, seq, regen_versions, regen_idx, edited, edit_branches, quote) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     );
 
     for (const m of tailJson) {
@@ -380,7 +429,9 @@ router.post('/:id/chat/branch/switch', (req, res) => {
         m.regen_versions ? JSON.stringify(m.regen_versions) : null,
         m.regen_idx ?? null,
         m.edited ?? 0,
-        m.edit_branches ? JSON.stringify(m.edit_branches) : null
+        m.edit_branches ? JSON.stringify(m.edit_branches) : null,
+        // 舊分支（工單 14 之前存的）沒有這個欄位 ⇒ ''，不是 undefined（better-sqlite3 會炸）
+        m.quote || ''
       );
     }
 
@@ -411,7 +462,7 @@ router.post('/:id/chat/branch/switch', (req, res) => {
 // GET /api/papers/:id/chat
 router.get('/:id/chat', (req, res) => {
   const messages = db.prepare(
-    'SELECT id, role, content, created_at, seq, regen_versions, regen_idx, edited, edit_branches FROM messages WHERE paper_id = ? ORDER BY seq ASC'
+    'SELECT id, role, content, created_at, seq, regen_versions, regen_idx, edited, edit_branches, quote FROM messages WHERE paper_id = ? ORDER BY seq ASC'
   ).all(req.params.id);
 
   const result = messages.map(m => ({
@@ -424,6 +475,8 @@ router.get('/:id/chat', (req, res) => {
     regen_idx: m.regen_idx ?? 0,
     edited: m.edited ?? 0,
     edit_branches: m.edit_branches ? JSON.parse(m.edit_branches) : [],
+    // 工單 14：氣泡上的引用塊要靠它畫；壞掉的 JSON 一律當作沒有引用（parseQuote 不拋）
+    quote: parseQuote(m.quote),
   }));
 
   res.json(result);

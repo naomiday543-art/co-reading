@@ -152,6 +152,7 @@ co-reading/
 | `regen_idx` | INT | 當前展示是第幾版（0-based） |
 | `edited` | INT | 0/1，僅 user |
 | `edit_branches` | TEXT (JSON) | `[{id, original_content, tail_count, ts}, ...]`；指向 `message_branches.id` |
+| `quote` | TEXT (JSON) | 選段引用（工單 14）：`{text, start, end, page}`，`start/end` 是 `papers.full_text` 的字元偏移，`page` 待工單 13 的 `text_meta.pages` 回填。**僅 user**；沒有引用時是 `''`。`content` 只存她打的字，引用另存這裡，不污染搜尋與洞察提取 |
 
 索引：
 - `idx_msg_paper_seq UNIQUE (paper_id, seq)` — 保證順序唯一
@@ -306,12 +307,12 @@ CREATE VIRTUAL TABLE insights_fts USING fts5(
 
 | Method | Path | Query | 說明 |
 |--------|------|-------|------|
-| POST | `/api/papers/:id/chat` | — | 正常發送：寫 user 消息 + 流式生成 assistant |
+| POST | `/api/papers/:id/chat` | — | 正常發送：寫 user 消息 + 流式生成 assistant。body 可帶 `quote: {text, start, end}`（工單 14）——後端必驗 `full_text.slice(start,end) === text`、`end-start ≤ 4000`，不過就 400 且不寫 DB、不打上游；帶 quote 時 `message` 可為空（用預設問題） |
 | POST | `/api/papers/:id/chat` | `?regenerate=true` | 在最後一條 assistant 上追加新版本；最後一條不是 assistant 時返回 400 |
 | POST | `/api/papers/:id/chat` | `?continue=true` | 不寫 user，基於現有歷史生成新 assistant（編輯後自動觸發） |
 | POST | `/api/papers/:id/chat/edit` | — | body: `{msg_id, content}`；保存 tail 為分支、截斷對話、更新 user 消息 |
 | POST | `/api/papers/:id/chat/branch/switch` | — | body: `{fork_id, branch_id}`；事務內完成快照當前 tail + 還原目標分支 |
-| GET | `/api/papers/:id/chat` | — | 回傳含 `regen_versions`, `regen_idx`, `edited`, `edit_branches` 的解析後 JSON |
+| GET | `/api/papers/:id/chat` | — | 回傳含 `regen_versions`, `regen_idx`, `edited`, `edit_branches`, `quote` 的解析後 JSON |
 
 **SSE 協議**（所有 streaming 端點共用）：
 ```
@@ -413,13 +414,20 @@ POST /api/papers/:id/chat {message}
         {text: constitution, cache_control: ephemeral},  // 憲章（constitution.js），永遠最前
         {text: paperBlock,   cache_control: ephemeral},  // 論文資訊+全文（已切參考文獻、
                                                         // 有壞頁時附抽字品質提示），命中 cache
-        {text: insightText},                              // 注入的洞察/續窗，每輪變化
-      ]
+        {text: insightText},                              // 注入的洞察/續窗/選段脈絡，每輪變化      ]
       → SSE 流式回覆
   → 流結束後 INSERT assistant message
 ```
 
 第二輪起：Anthropic 端會命中 prompt cache，論文全文那段 token 費用大幅下降。
+
+**選段提問**（工單 14）：`quote` 進的是 **user 訊息**（`【引用原文（全文第 S–E 字，約第 P 段）】`
+＋她的問題＋答題指令，由 `src/quote.js` 的 `renderQuotedMessage` 組）與**變動區**
+（選段前後各 600 字的位置脈絡）。**兩者都不進穩定前綴**——憲章與論文區塊逐字不變，
+cache 才命得中。歷史回放（`loadHistory()`，送出／重新生成／繼續共用）用的是同一顆
+渲染函式，所以同一輪回放幾次都逐字相同。前端的偏移映射見
+`frontend/src/lib/fulltext-offsets.js`（段落掛 `data-cr-offset`，引用文字一律取
+`full_text.slice(start,end)`）。
 
 ### 9.3 重新生成 / 編輯 / 分支切換
 - 詳見第 5.2 / 5.3 節數據模型
