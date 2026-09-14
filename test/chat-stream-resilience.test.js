@@ -18,7 +18,7 @@ import {
   chatAboutPaper, buildBody,
   StreamIdleError, ChatAbortedError,
   resolveChatIdleTimeoutMs, resolveChatRetries, resolveChatStreamUsage,
-  describeChatError, MAX_TIMER_MS,
+  describeChatError, MAX_TIMER_MS, resolvePaperFulltextLimit,
 } from '../src/ai.js';
 import { thinkingLabel, THINKING_LABEL_DELAY_MS } from '../frontend/src/store.js';
 
@@ -569,21 +569,25 @@ describe('討論路由：thinking 節流、error 帶 partial/hint、中止、重
     }
   });
 
-  test('§5.8 全文截斷旗標：100,001 字 → true；100,000 → false', async () => {
+  // 工單 13 §3.1 把上限從寫死的 100,000 換成 resolvePaperFulltextLimit()（預設 250,000，
+  // 可用 PAPER_FULLTEXT_LIMIT_CHARS 調）。這顆釘子要釘的是「旗標跟著同一顆上限走」，
+  // 不是那個數字本身，所以改成相對上限。
+  test('§5.8 全文截斷旗標：上限+1 字 → true；剛好等於上限 → false', async () => {
+    const limit = resolvePaperFulltextLimit();
     const big = makePaper('trunc_big');
     const edge = makePaper('trunc_edge');
     try {
-      db.prepare('UPDATE papers SET full_text = ? WHERE id = ?').run('字'.repeat(100_001), big.id);
-      db.prepare('UPDATE papers SET full_text = ? WHERE id = ?').run('字'.repeat(100_000), edge.id);
+      db.prepare('UPDATE papers SET full_text = ? WHERE id = ?').run('字'.repeat(limit + 1), big.id);
+      db.prepare('UPDATE papers SET full_text = ? WHERE id = ?').run('字'.repeat(limit), edge.id);
 
       const a = await (await fetch(`${baseUrl}/api/papers/${big.id}`)).json();
       assert.equal(a.full_text_truncated, true);
-      assert.equal(a.full_text_chars, 100_001);
-      assert.equal(a.full_text_limit, 100_000);
+      assert.equal(a.full_text_chars, limit + 1);
+      assert.equal(a.full_text_limit, limit);
 
       const b = await (await fetch(`${baseUrl}/api/papers/${edge.id}`)).json();
-      assert.equal(b.full_text_truncated, false, '剛好等於上限不算截斷（buildPaperBlock 用的是 >）');
-      assert.equal(b.full_text_chars, 100_000);
+      assert.equal(b.full_text_truncated, false, '剛好等於上限不算截斷（clipFullText 用的是 >）');
+      assert.equal(b.full_text_chars, limit);
     } finally {
       dropPaper(big.id);
       dropPaper(edge.id);

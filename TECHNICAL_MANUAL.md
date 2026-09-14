@@ -135,6 +135,7 @@ co-reading/
 | `tree_node_id` | FK → tree_nodes | 所在知識樹節點，可為 NULL |
 | `analyze_status` | TEXT | `pending` / `analyzing` / `done` / `error` |
 | `analyze_error` | TEXT | 失敗訊息 |
+| `text_meta` | TEXT | 抽字後設資料 JSON（工單 13）：`{version, references:{start,end,chars,cut,reason,heading,density}, pages:[{n,chars,lines,single_char_line_ratio,nonword_ratio,avg_line_len,rotated_hint,quality,reasons}], bad_pages:[n]}`。**推導資料**，空字串＝還沒算；隨時可 `POST /api/papers/:id/text-meta/rebuild` 重算 |
 | `created_at`, `updated_at` | INT | ms timestamp |
 
 ### 5.2 `messages` — 討論訊息
@@ -222,6 +223,13 @@ CREATE VIRTUAL TABLE insights_fts USING fts5(
   - 每輪 log `[CONSTITUTION] source=user|builtin|fallback`，看導師身份是從哪一級載入的
   - `userMessage = null` 表示「不附加 user 消息」，用於 regenerate / continue
 - `testConnection(config)` — Settings 頁面試 API 連通性
+- 全文進 prompt 的那條路（工單 13）：`prepareFullTextForModel(fullText, textMeta)`
+  ＝ `stripReferences`（切參考文獻區塊，換成一行 `[參考文獻 N 字已略去]`）
+  → `clipFullText`（超過 `resolvePaperFulltextLimit()` 就截斷並附 `[全文已截斷]`）。
+  **順序不能反**，先切才省得下截斷。通讀與討論共用；`papers.full_text` 原文永遠不動。
+  `buildQualityNote(textMeta)` 產出壞頁那句小註（沒壞頁時回空字串 ⇒ 穩定前綴不變）
+- 錯誤分類 `analyzeErrorKind` 多一類 `ctx_overflow`（4xx ＋ context/length/too long/
+  maximum）：**不重試**，訊息直接告訴她調 `PAPER_FULLTEXT_LIMIT_CHARS`
 
 ### 6.2a `constitution.js` — 導師憲章（工單 05，2026-09-08）
 「導師是誰」不再硬編在 `ai.js`，而是一個 Markdown 文件，仿 research-gateway 的 `skills/CONSTITUTION.md` 模式（兩個 repo **各自一份**，不共用）。
@@ -256,6 +264,19 @@ CREATE VIRTUAL TABLE insights_fts USING fts5(
 - 用 `pdf-parse` 提取純文本
 - 文本長度 < 100 字視為掃描版，throw `SCANNED_PDF` error code
 - 上層 `papers.js` 捕獲後將論文標記為 error
+- `extractPDFDetailed(path)` → `{ text, pageMeta }`：全文 ＋ 頁級抽字品質，一次解析拿到
+- `locateReferencesBlock(fullText)`（工單 13 §3.2）：找參考文獻區塊的 `[start, end)`。
+  起點＝位置 ≥50% 的**最後一個**獨立行標題（References / Bibliography / 參考文獻…）；
+  終點＝下一個「整行就是章節標題」的行（STAR METHODS / Methods / Supplementary /
+  Appendix / Acknowledgements / Author contributions / Key Resources Table / 致谢…），
+  沒有就到文末，再按引用密度從尾端回退（防止把夾在中間的圖注一起切掉）。
+  區塊要過「每千字 ≥6 個引用特徵」才算數，否則 `reason='low_density'` 不切。
+  **只回位置，不動原文**；切除在 `ai.js` 的 `stripReferences` 上發生。
+- `describePages(pages)`（工單 13 §3.3）：每頁算 chars / lines / 單字元行比例 /
+  非文字符號比例 / 平均行長 / 旋轉指紋（多數 text item 的 `transform[0]≈0 且 [1]≠0`，
+  或整頁 `/Rotate 90`），判成 `ok | poor | rotated`
+- `buildTextMeta(fullText, pageMeta)` → 存進 `papers.text_meta` 的那顆 JSON；
+  `parseTextMeta(raw)` 反向解析（壞掉回 `null`，呼叫端自己決定要不要重算）
 
 ### 6.6 `logger.js`
 - 寫檔案 + ring buffer（記憶體保留最近 N 條）
@@ -273,11 +294,12 @@ CREATE VIRTUAL TABLE insights_fts USING fts5(
 |--------|------|------|
 | POST | `/api/papers/upload` | multipart，欄位名 `files`，可選 `tree_node_id`；上傳後非同步觸發通讀 |
 | GET | `/api/papers` | 列表，支援 `?status`, `?tag`, `?tree_node_id` (`__none` 為未分類), `?q`, `?sort=title\|created\|updated` |
-| GET | `/api/papers/:id` | 含 tags 與 tree_node |
+| GET | `/api/papers/:id` | 含 tags、tree_node、`full_text_chars` / `full_text_truncated` / `full_text_limit`（工單 12 §3.5）、`text_meta`（工單 13；沒算過會當場補算並回寫） |
 | PATCH | `/api/papers/:id` | 部分更新（白名單：title, authors, year, doi, status, notes, tree_node_id） |
 | DELETE | `/api/papers/:id` | 連帶刪除 PDF 檔案，message / annotation / section_progress 透過 FK CASCADE 一併刪 |
 | GET | `/api/papers/:id/pdf` | 串流原始 PDF |
 | POST | `/api/papers/:id/analyze` | 觸發（或重跑）通讀 |
+| POST | `/api/papers/:id/text-meta/rebuild` | 重算 `text_meta`（參考文獻位置＋重新解析 PDF 取頁級品質） |
 | POST | `/api/papers/:id/extract-insights` | 從討論提取洞察 |
 
 ### 7.2 對話（SSE）
@@ -389,7 +411,8 @@ POST /api/papers/:id/chat {message}
   → chatAboutPaper(paper, history, message):
       systemForRequest = [
         {text: constitution, cache_control: ephemeral},  // 憲章（constitution.js），永遠最前
-        {text: paperBlock,   cache_control: ephemeral},  // 論文資訊+全文，命中 cache
+        {text: paperBlock,   cache_control: ephemeral},  // 論文資訊+全文（已切參考文獻、
+                                                        // 有壞頁時附抽字品質提示），命中 cache
         {text: insightText},                              // 注入的洞察/續窗，每輪變化
       ]
       → SSE 流式回覆
@@ -434,6 +457,11 @@ ANALYZE_BASE_URL=https://api.deepseek.com/v1
 ANALYZE_API_KEY=sk-...
 ANALYZE_MODEL=deepseek-chat
 ANALYZE_FORMAT=openai
+
+# 送進模型的全文上限（工單 13）。預設 250000 字 ≈ 65000 token；[20000, 2000000]
+PAPER_FULLTEXT_LIMIT_CHARS=250000
+# 送模型前切掉參考文獻區塊（預設開；papers.full_text 原文不動）
+CUT_REFERENCES=true
 
 PORT=3456
 ```

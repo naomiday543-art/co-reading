@@ -7,6 +7,7 @@ import ChatPanel from '../components/ChatPanel';
 import TagBadge from '../components/TagBadge';
 import InsightCard from '../components/InsightCard';
 import InsightForm from '../components/InsightForm';
+import { describeTextQuality, renderPageReasons } from '../textQuality';
 
 // 閱讀模式的聊天抽屜寬度（工單 06 §3.1）
 const DRAWER_WIDTH_KEY = 'co-reading:chat-drawer-width';
@@ -312,13 +313,15 @@ export default function PaperDetail({ paperId, onBack }) {
           <div className="overflow-y-auto pr-4 flex-1">
           {leftTab === 'summary' ? (
             <>
-            {/* 工單 12 §3.5：AI 只讀得到前 100,000 字，超過的部分她有權知道 */}
+            {/* 工單 12 §3.5：AI 只讀得到前 N 字，超過的部分她有權知道 */}
             {paper.full_text_truncated && (
               <div className="mb-3 text-xs text-muted">
                 全文 {paper.full_text_chars.toLocaleString('en-US')} 字，AI 只讀前{' '}
-                {(paper.full_text_limit || 100000).toLocaleString('en-US')} 字
+                {(paper.full_text_limit || 250000).toLocaleString('en-US')} 字
               </div>
             )}
+            {/* 工單 13 §3.3：哪幾頁抽字抽壞了。沒壞頁時整塊不出現。 */}
+            <TextQualityNotice textMeta={paper.text_meta} />
             <SummaryView paper={paper} />
 
           {/* Retry analyze */}
@@ -542,6 +545,31 @@ export default function PaperDetail({ paperId, onBack }) {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * 抽字品質提示（工單 13 §3.3）：一行人話，點開看每頁的數字。
+ * 沒有壞頁、或這篇還沒算過 text_meta 時整塊不渲染——沒問題的時候不要製造焦慮。
+ */
+function TextQualityNotice({ textMeta }) {
+  const quality = describeTextQuality(textMeta);
+  if (!quality) return null;
+
+  return (
+    <details className="mb-3 text-xs text-muted">
+      <summary className="cursor-pointer select-none hover:text-text-strong">
+        {quality.line}（AI 讀不到這些頁）
+      </summary>
+      <div className="mt-2 pl-3 border-l border-border-soft space-y-1">
+        {quality.badPages.map(page => (
+          <div key={page.n} className="cr-mono text-[11px] text-faint">
+            第 {page.n} 頁 · {renderPageReasons(page.reasons)} · {page.chars} 字 / {page.lines} 行
+          </div>
+        ))}
+        <div className="text-[11px] text-faint pt-1">共 {quality.pageCount} 頁</div>
+      </div>
+    </details>
   );
 }
 
