@@ -180,11 +180,11 @@ function trimReferencesTail(text, start, end) {
   }
   if (cursor >= end) return end;
 
-  // 回退是以 1000 字為格的，格線會落在某條文獻中間。往後補到「這一行不再像文獻」為止，
-  // 免得原文裡留下半條參考文獻。只往前補，永遠不超過原本的終點。
-  let line = text.indexOf('\n', cursor);
-  if (line === -1 || line >= end) return Math.min(cursor, end);
-  let out = line + 1;
+  // 回退是以 1000 字為格的，格線會落在某一行中間。先退到該行行首（絕不吃掉半行別人的字），
+  // 再往後補到「這一行不再像文獻」為止，免得原文裡留下半條參考文獻。
+  // 只在區塊內移動，永遠不超過原本的終點。
+  const lineStart = text.lastIndexOf('\n', Math.max(0, cursor - 1)) + 1;
+  let out = Math.max(start, lineStart);
   for (let i = 0; i < TAIL_EXTEND_MAX_LINES && out < end; i += 1) {
     const nl = text.indexOf('\n', out);
     const stop = nl === -1 || nl >= end ? end : nl + 1;
