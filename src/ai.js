@@ -327,6 +327,34 @@ export class StreamIdleError extends StreamInterruptedError {
   }
 }
 
+/**
+ * 上游回了 HTTP 200、串流也好好收完，但正文一個字都沒有（工單 17 §2.1）。
+ *
+ * 9/14 15:17 的生產形狀：`finish=length chars_out=0 reasoning_chars=12133`——推理模型
+ * 的思考鏈與正文共用同一個 completion 預算，4,096 token 被思考吃光，正文就是空字串。
+ * 這跟通讀線 9/9 那顆（記憶 `coreading-analyze-opencode-fix-20260909`）是同一種病，
+ * 所以歸到同一個 `kind:'output'`：**不進連線類重試名單**（重打同樣預算只會再空一次，
+ * 還多燒一次錢），由 `chatAboutPaper` 自己用「兩倍預算」重打一次來救。
+ */
+export class ChatEmptyOutputError extends StreamInterruptedError {
+  constructor({ reasoningChars = 0, maxTokens = 0, finishReason = null, budgetExhausted = false, stats = {} } = {}) {
+    super(
+      budgetExhausted
+        ? `模型把輸出預算全花在思考上（思考 ${formatCount(reasoningChars)} 字、正文 0 字，`
+          + `預算 ${formatCount(maxTokens)} token）。可在 .env 調高 CHAT_MAX_TOKENS，`
+          + '或在設定頁改用非推理模型'
+        : `模型回了空正文（finish=${finishReason ?? '未提供'}、思考 ${formatCount(reasoningChars)} 字、`
+          + `預算 ${formatCount(maxTokens)} token）。換個問法，或在設定頁改用其他模型再試`,
+      { ...stats, kind: 'output' },
+    );
+    this.name = 'ChatEmptyOutputError';
+    this.reasoningChars = reasoningChars;
+    this.maxTokens = maxTokens;
+    this.finishReason = finishReason;
+    this.budgetExhausted = budgetExhausted;
+  }
+}
+
 /** 總逾時在讀 body 的階段打到（就是 9/13 那發漏出英文的位置）。 */
 export class StreamTimeoutError extends StreamInterruptedError {
   constructor(totalTimeoutMs, stats) {
@@ -672,6 +700,44 @@ export function resolveChatStreamUsage() {
   const raw = process.env.CHAT_STREAM_USAGE;
   if (raw === undefined || raw === null || `${raw}`.trim() === '') return true;
   return !['0', 'false', 'off', 'no'].includes(`${raw}`.trim().toLowerCase());
+}
+
+/**
+ * 兩倍重打的天花板。再往上就不是「思考鏈長」而是模型或問題本身有問題，
+ * 繼續加預算只是把錢燒得更快。也是 `CHAT_MAX_TOKENS` 的上限。
+ */
+export const CHAT_MAX_TOKENS_CEILING = 32_768;
+
+/**
+ * 討論線的輸出預算（工單 17 §2.1）。預設 8192，clamp [1024, 32768]。
+ *
+ * 舊值是寫死的 4096，而 `deepseek-v4-flash` 這類推理模型的思考鏈與正文**共用同一個
+ * completion 預算**：9/14 15:17 那發思考了 12,133 字（≈4,096 token）就把預算用完，
+ * `finish_reason=length`、正文 0 字，她看到的是一個空氣泡。通讀線 9/9 已經把同一顆
+ * 旋鈕調到 8000（`ANALYZE_MAX_TOKENS`），討論線這次補上。
+ * 寫法與 `resolveChatIdleTimeoutMs`／`resolveChatRetries` 同一套：每次呼叫重讀 env
+ * （改 .env 重啟即生效，測試也不必重新 import）；空／0／非數字 → 預設。
+ */
+export function resolveChatMaxTokens() {
+  const raw = process.env.CHAT_MAX_TOKENS;
+  if (raw === undefined || raw === null || `${raw}`.trim() === '') return 8192;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 8192;
+  return clampNumber(n, { min: 1024, max: CHAT_MAX_TOKENS_CEILING, fallback: 8192 });
+}
+
+/**
+ * 「這一發是不是把輸出預算燒完了」——`completionMeta().truncated` 的串流版。
+ *
+ * 非串流那條路有完整的 JSON 可以餵 `completionMeta`；討論線只有串流途中回填的 `stats`，
+ * 所以在這裡認同一組收尾詞（openai `length`／anthropic `max_tokens`），外加 usage 佐證
+ * （有些線 finish_reason 不回，但 completion_tokens 會剛好頂到預算）。
+ */
+function isBudgetExhausted(stats, maxTokens) {
+  const finish = stats?.finishReason;
+  if (finish === 'length' || finish === 'max_tokens') return true;
+  const completion = stats?.usage?.completion_tokens ?? stats?.usage?.output_tokens;
+  return Number.isFinite(completion) && Number.isFinite(maxTokens) && completion >= maxTokens;
 }
 
 /** 報告 11 §3 實測：她這批中英混排的論文約 3.85 字／token。只用來把字數換算成人看的 token 估值。 */
@@ -1245,6 +1311,7 @@ function cacheHitOf(usage) {
  * @param {number} [options.timeoutMs] 覆蓋單次請求總逾時
  * @param {number} [options.retries] 覆蓋重試次數（預設讀 CHAT_RETRIES）
  * @param {number} [options.retryDelayMs]
+ * @param {number} [options.maxTokens] 覆蓋輸出預算（預設讀 CHAT_MAX_TOKENS，見 §2.1）
  */
 export async function chatAboutPaper(paper, history, userMessage, onChunk, options = {}) {
   const config = getChatConfig();
@@ -1344,7 +1411,7 @@ export async function chatAboutPaper(paper, history, userMessage, onChunk, optio
 
   const {
     onReasoning, signal,
-    idleTimeoutMs, timeoutMs, retries, retryDelayMs,
+    idleTimeoutMs, timeoutMs, retries, retryDelayMs, maxTokens: maxTokensOverride,
   } = options;
   const idleMs = idleTimeoutMs ?? resolveChatIdleTimeoutMs();
   const totalMs = timeoutMs ?? REQUEST_TIMEOUT_MS;
@@ -1359,8 +1426,14 @@ export async function chatAboutPaper(paper, history, userMessage, onChunk, optio
 
   let lastError = null;
   let retriesUsed = 0;
+  // 預算重打（工單 17 §2.1）跟下面那顆連線類重試是**兩顆不同的計數器**，各自上限 1，
+  // 誰也不吃誰的額度：連線壞掉重打一次，是「同一份預算再送一次」；預算被思考吃光重打
+  // 一次，是「換一個更大的預算送一次」。最壞情況（先停滯、再空正文）就是 3 發。
+  let budgetRetried = false;
+  let maxTokens = maxTokensOverride ?? resolveChatMaxTokens();
+  let attempt = 1;
 
-  for (let attempt = 1; attempt <= maxRetries + 1; attempt += 1) {
+  for (;;) {
     const startedAt = Date.now();
     const stats = {};
     let fullResponse = '';
@@ -1370,7 +1443,7 @@ export async function chatAboutPaper(paper, history, userMessage, onChunk, optio
     try {
       const response = await makeRequest({ ...config, scope }, {
         messages,
-        max_tokens: 4096,
+        max_tokens: maxTokens,
         temperature: 0.3,
         stream: true,
         timeoutMs: totalMs,
@@ -1392,6 +1465,30 @@ export async function chatAboutPaper(paper, history, userMessage, onChunk, optio
         onChunk(chunk);
       }
 
+      // 空正文守門（工單 17 §2.1）：HTTP 200、串流收完、正文 0 字——這不是「成功」。
+      // 舊版把它當成功回傳，路由就把一個 0 字的 assistant 寫進 DB，她看到空氣泡。
+      if (fullResponse.trim() === '') {
+        const reasoningChars = stats.reasoningChars ?? 0;
+        const exhausted = isBudgetExhausted(stats, maxTokens);
+        // 預算被思考吃光 ⇒ 換兩倍預算重打一次（只有這一次）。同一個預算重打是白燒。
+        if (exhausted && !budgetRetried && maxTokens < CHAT_MAX_TOKENS_CEILING) {
+          const nextTokens = Math.min(maxTokens * 2, CHAT_MAX_TOKENS_CEILING);
+          budgetRetried = true;
+          log('INFO', `[CHAT] retry 1/1 paper=${paper.id} reason=budget`
+            + ` max_tokens=${maxTokens}→${nextTokens}`
+            + ` reasoning_chars=${reasoningChars} finish=${stats.finishReason ?? '未提供'}`);
+          maxTokens = nextTokens;
+          continue;                        // 不動 attempt：這不吃連線類重試的額度
+        }
+        throw new ChatEmptyOutputError({
+          reasoningChars,
+          maxTokens,
+          finishReason: stats.finishReason ?? null,
+          budgetExhausted: exhausted,
+          stats,
+        });
+      }
+
       log('INFO', `[CHAT] ok paper=${paper.id}`
         + ` ttfb=${elapsedSeconds(startedAt, headersAt)}s`
         + ` ttft=${firstContentAt ? elapsedSeconds(startedAt, firstContentAt) : '未提供'}s`
@@ -1401,6 +1498,7 @@ export async function chatAboutPaper(paper, history, userMessage, onChunk, optio
         + ` reasoning_chars=${stats.reasoningChars ?? 0}`
         + ` max_gap=${stats.maxGapMs ?? 0}ms`
         + ` finish=${stats.finishReason ?? '未提供'}`
+        + ` max_tokens=${maxTokens}`
         + ` cache_hit=${cacheHitOf(stats.usage)}`
         + ` usage=${stats.usage ? JSON.stringify(stats.usage) : 'none'}`);
 
@@ -1414,11 +1512,17 @@ export async function chatAboutPaper(paper, history, userMessage, onChunk, optio
       lastError = err;
       const kind = analyzeErrorKind(err);
       log('WARN', `[CHAT] fail paper=${paper.id} elapsed=${elapsedSeconds(startedAt)}s kind=${kind}`
-        + ` chars_out=${fullResponse.length} max_gap=${stats.maxGapMs ?? 0}ms`);
+        + ` chars_out=${fullResponse.length} max_gap=${stats.maxGapMs ?? 0}ms`
+        // 空正文那一型，唯一看得出真相的數字就是「思考花了多少、預算多大」。
+        + (kind === 'output'
+          ? ` reasoning_chars=${stats.reasoningChars ?? 0} max_tokens=${maxTokens}`
+            + ` finish=${stats.finishReason ?? '未提供'}`
+          : ''));
 
       // 已經吐過正文就絕不重試：重打會讓畫面上的半截答案整段被另一份取代。
       // 半截由前端保住（工單 12 §3.4-③），錯誤訊息帶 partial 告訴她收到多少。
-      if (fullResponse.length > 0) {
+      // 只有空白字元不算「吐過正文」——那是空正文那一型，partial 要報 0。
+      if (fullResponse.trim().length > 0) {
         err.partialChars = fullResponse.length;
         break;
       }
@@ -1426,6 +1530,7 @@ export async function chatAboutPaper(paper, history, userMessage, onChunk, optio
 
       retriesUsed = attempt;
       log('INFO', `[CHAT] retry ${attempt}/${maxRetries} paper=${paper.id} reason=${kind}`);
+      attempt += 1;
       await sleep(delayMs);
     }
   }

@@ -6,6 +6,9 @@ import { create } from 'zustand';
 const READING_MODE_KEY = 'co-reading:reading-mode';
 const CHAT_FONT_KEY = 'co-reading:chat-font';
 
+/** 「使用進階設定」的本機記憶（工單 17 §2.2）。後端的 `advanced_enabled` 才是跨機器的事實源。 */
+export const ADVANCED_ENABLED_KEY = 'co-reading-settings.advanced.enabled';
+
 export const CHAT_FONT_SIZES = ['sm', 'md', 'lg'];
 export const CHAT_FONT_PX = { sm: '14px', md: '16px', lg: '18px' };
 export const CHAT_FONT_LABELS = { sm: '小', md: '中', lg: '大' };
@@ -124,6 +127,15 @@ function loadChatFontSize() {
   }
 }
 
+/** 開機時先信本機記憶；`Settings` 掛載後會用後端的 `advanced_enabled` 覆蓋掉。 */
+function loadAdvancedEnabled() {
+  try {
+    return localStorage.getItem(ADVANCED_ENABLED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export const useStore = create((set, get) => ({
   // Papers
   papers: [],
@@ -184,8 +196,16 @@ export const useStore = create((set, get) => ({
   // Settings
   provider: 'anthropic',
   setProvider: (p) => set({ provider: p }),
+  // `advancedOpen` 只是摺疊區的版面狀態（不持久化）；
+  // 「要不要用進階值」是 `advancedEnabled`，持久化到 localStorage ＋ 後端 settings。
   advancedOpen: false,
   toggleAdvanced: () => set(s => ({ advancedOpen: !s.advancedOpen })),
+  advancedEnabled: loadAdvancedEnabled(),
+  setAdvancedEnabled: (v) => {
+    const next = !!v;
+    try { localStorage.setItem(ADVANCED_ENABLED_KEY, next ? '1' : '0'); } catch {}
+    set({ advancedEnabled: next });
+  },
 
   // Insights
   insights: [],
@@ -227,4 +247,80 @@ const providerDefaults = {
 
 export function getProviderDefaults(provider) {
   return providerDefaults[provider] || providerDefaults.custom;
+}
+
+// ── 進階設定的開關（工單 17 §2.2）──────────────────────────────────
+// 舊版拿**摺疊狀態**（`advancedOpen`）當「要不要寫進階值」的判斷：摺疊區關著按儲存，
+// 通讀線的 base_url／model／format／vision 全部被 preset 預設蓋回去。
+// 9/14 13:40 她把視覺模式改成 off、再按上面那顆儲存，就這樣被寫回 preset 的 'on'。
+// 開關與摺疊從此分家：`advancedEnabled` 是持久化的意圖，`advancedOpen` 只是版面。
+
+function truthy(raw) {
+  return !['0', 'false', 'off', 'no'].includes(`${raw}`.trim().toLowerCase());
+}
+
+/**
+ * 這台機器到底算不算「開著進階設定」。
+ *
+ * 後端有 `advanced_enabled` 就聽後端的（跨瀏覽器／跨機器的唯一事實源）。
+ * 沒有這個鍵＝還沒升級過的舊資料：**通讀線與討論線只要有一項真的不一樣，就推定為開**——
+ * 否則她既有的分開設定會在第一次儲存時被 preset 靜靜蓋掉（就是這次要修的那個病）。
+ * 只有兩邊都填了而且不同才算「不一樣」：analyze_* 留空是「沒有分開設定」，不是差異。
+ *
+ * @param {object} cfg `GET /api/settings` 的回應
+ * @returns {boolean}
+ */
+export function inferAdvancedEnabled(cfg = {}) {
+  const raw = cfg.advanced_enabled;
+  if (raw !== undefined && raw !== null && `${raw}`.trim() !== '') return truthy(raw);
+
+  const differs = (a, b) => !!a && !!b && a !== b;
+  return differs(cfg.analyze_base_url, cfg.ai_base_url)
+    || differs(cfg.analyze_model, cfg.ai_model)
+    || differs(cfg.analyze_format, cfg.ai_format)
+    || differs(cfg.analyze_api_key, cfg.ai_api_key);
+}
+
+/**
+ * 組 `PUT /api/settings` 的 body。純函式，好單測（工單 17 §4.6）。
+ *
+ * 關鍵是它**只看 `advancedEnabled`，不看摺疊狀態**：她在進階區改完、把區塊收起來
+ * 再按儲存，寫出去的還是她改的值。關閉進階才回 preset 預設——而且那是她自己按的開關，
+ * UI 上有寫「關閉後通讀線會回到 preset 預設」。
+ *
+ * @param {{provider: string, apiKey: string, advancedEnabled: boolean, advanced: object}} input
+ */
+export function buildSettingsPayload({ provider, apiKey, advancedEnabled, advanced } = {}) {
+  const defaults = getProviderDefaults(provider);
+  const a = advanced || {};
+  const on = !!advancedEnabled;
+
+  const baseUrl = on ? a.chatBaseUrl : defaults.base_url;
+  const format = on ? a.chatFormat : defaults.format;
+  const model = on ? a.chatModel : defaults.model;
+
+  return {
+    ai_api_key: apiKey || '',
+    ai_base_url: baseUrl || '',
+    ai_model: model || '',
+    ai_format: format || 'openai',
+    analyze_api_key: on && a.analyzeApiKey ? a.analyzeApiKey : (apiKey || ''),
+    analyze_base_url: on && a.analyzeBaseUrl ? a.analyzeBaseUrl : (baseUrl || ''),
+    analyze_model: on && a.analyzeModel ? a.analyzeModel : (defaults.analyze_model || model || ''),
+    analyze_format: on ? (a.analyzeFormat || format) : format,
+    analyze_vision_model: on && a.analyzeVisionModel ? a.analyzeVisionModel : (defaults.vision_model || ''),
+    // 開著進階時就是寫她選的那個值——不再有 `defaults.vision_mode` 的回填（§2.2）。
+    analyze_vision_mode: on ? (a.analyzeVisionMode || 'auto') : (defaults.vision_mode || 'auto'),
+    advanced_enabled: on ? 'true' : 'false',
+  };
+}
+
+/** 密鑰欄位一律不進主控台／日誌（§3 紅線）。名字裡有 key／token／secret／password 的都算。 */
+export function publicSettingsSummary(cfg = {}) {
+  const out = {};
+  for (const [key, value] of Object.entries(cfg)) {
+    if (/key|token|secret|password/i.test(key)) continue;
+    out[key] = value;
+  }
+  return out;
 }
