@@ -188,6 +188,17 @@ export const useStore = create((set, get) => ({
   }),
   clearQuoteJump: () => set({ quoteJump: null }),
 
+  // ── 跳到某一則訊息（工單 18 §2 A2）────────────────────────────────
+  // 跟 `quoteJump` 同一套（工單 14）：store 放一顆一次性訊號 →ChatPanel 的 effect
+  // `scrollIntoView` ＋ 閃一下 → 清掉。差別只在目標是「訊息 id」不是「原文偏移」。
+  // 從洞察頁按「去對話」時**先發訊號再換頁**，ChatPanel 掛載後訊息載好才消化得到，
+  // 所以它要等 `messages` 非空才判定找不找得到（見 ChatPanel 的 effect）。
+  messageJump: null,
+  requestMessageJump: (messageId) => set({
+    messageJump: messageId ? { id: messageId, ts: Date.now() } : null,
+  }),
+  clearMessageJump: () => set({ messageJump: null }),
+
   searchQuery: '',
   setSearchQuery: (q) => set({ searchQuery: q }),
   sortBy: 'updated',

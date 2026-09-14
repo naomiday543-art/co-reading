@@ -211,6 +211,33 @@ if (!columnExists('insights', 'synced_at')) {
 db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_insights_external_ombre
   ON insights(external_ombre_id) WHERE external_ombre_id IS NOT NULL`);
 
+// ── Idempotent migration: insights.source_message_id（工單 18 §2 A1）──
+// 「這條洞察是從哪一則回覆長出來的」。空字串＝沒記錄（存量洞察、對比線的共振、
+// 提取時關鍵詞回找撲空）。**不是外鍵**：訊息可能因為編輯／重生被截掉，
+// 洞察是長期資產不該跟著消失；讀的時候查不到就退回 source_context 顯示。
+// ALTER ADD COLUMN 帶 DEFAULT ''⇒ 存量列自動補 ''，不需要回填 UPDATE。
+if (!columnExists('insights', 'source_message_id')) {
+  db.exec(`ALTER TABLE insights ADD COLUMN source_message_id TEXT DEFAULT ''`);
+}
+
+// ── 洞察之間的連線（工單 18 §2 B1）──────────────────────────────────
+// 無向圖，**a<b 正規化**（同一對只有一列）。score 是 FTS5 trigram 的 bm25
+// 對「自己查自己」正規化之後的 0–1 值（見 src/insightLinks.js），**零 token**；
+// reason 是可選的一句話（INSIGHT_LINK_REASON 打開才會有，預設關）。
+// 推導資料：隨時可以 DELETE 全表再 relink-all 重建，事實源永遠是 insights 本身。
+db.exec(`
+  CREATE TABLE IF NOT EXISTS insight_links (
+    a          TEXT NOT NULL REFERENCES insights(id) ON DELETE CASCADE,
+    b          TEXT NOT NULL REFERENCES insights(id) ON DELETE CASCADE,
+    score      REAL NOT NULL DEFAULT 0,
+    reason     TEXT NOT NULL DEFAULT '',
+    method     TEXT NOT NULL DEFAULT 'fts',
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+    PRIMARY KEY (a, b)
+  );
+  CREATE INDEX IF NOT EXISTS idx_insight_links_b ON insight_links(b);
+`);
+
 // ── Idempotent migration: tree_nodes.description（工單 07 §3.1）──
 // 研究方向 = parent_id IS NULL 的節點；description 是她寫給 AI 看的一段話
 // （這個方向在做什麼、關心什麼問題），注入討論與提取 prompt。

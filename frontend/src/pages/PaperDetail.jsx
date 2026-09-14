@@ -7,6 +7,7 @@ import ChatPanel from '../components/ChatPanel';
 import TagBadge from '../components/TagBadge';
 import InsightCard from '../components/InsightCard';
 import InsightForm from '../components/InsightForm';
+import InsightPopover from '../components/InsightPopover';
 import { describeTextQuality, renderPageReasons } from '../textQuality';
 
 // 閱讀模式的聊天抽屜寬度（工單 06 §3.1）
@@ -24,7 +25,7 @@ function loadDrawerWidth() {
   }
 }
 
-export default function PaperDetail({ paperId, onBack }) {
+export default function PaperDetail({ paperId, onBack, onNavigate }) {
   const [paper, setPaper] = useState(null);
   const [loading, setLoading] = useState(true);
   const [split, setSplit] = useState(50);
@@ -37,11 +38,17 @@ export default function PaperDetail({ paperId, onBack }) {
   const [treeMenu, setTreeMenu] = useState(false);
   const [relatedInsights, setRelatedInsights] = useState([]);
   const [showInsightForm, setShowInsightForm] = useState(false);
+  // 工單 18 §2 A1：「存為洞察」帶進來的預填（來源論文＋那一則回覆的 id）
+  const [insightSeed, setInsightSeed] = useState({ source_paper_id: paperId });
+  // 工單 18 §2 A2：論文頁的相關洞察卡片點下去也浮這張卡（渲染 InsightCard 的地方行為一致）
+  const [popoverId, setPopoverId] = useState(null);
   const { tags, tree, papers, setTags, readingMode, setReadingMode } = useStore();
   // 工單 14 §3.3：選段與跳回原文是跨面板的動作（FullTextView ↔ ChatPanel），
   // 中間只借 store 這兩顆訊號，兩個元件都不用知道對方存在。
   const pendingQuote = useStore(s => s.pendingQuote);
   const quoteJump = useStore(s => s.quoteJump);
+  const messageJump = useStore(s => s.messageJump);
+  const requestMessageJump = useStore(s => s.requestMessageJump);
 
   // 閱讀模式的聊天抽屜：開合不持久化（每次進論文預設收起），寬度持久化
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -50,6 +57,12 @@ export default function PaperDetail({ paperId, onBack }) {
   const [chatUnread, setChatUnread] = useState(false);
   const drawerWidthRef = useRef(drawerWidth);
   const lastMsgCount = useRef(null);
+
+  // 工單 18 §2 A2：閱讀模式下討論是收起來的抽屜——有待跳的訊息就先把它打開，
+  // 不然「去對話」按下去畫面毫無反應。
+  useEffect(() => {
+    if (messageJump && readingMode) setDrawerOpen(true);
+  }, [messageJump, readingMode]);
 
   const loadPaper = useCallback(async () => {
     try {
@@ -472,7 +485,7 @@ export default function PaperDetail({ paperId, onBack }) {
                     key={ins.id}
                     insight={ins}
                     compact
-                    onClick={() => {}}
+                    onClick={(insight) => setPopoverId(insight.id)}
                   />
                 ))}
               </div>
@@ -525,7 +538,10 @@ export default function PaperDetail({ paperId, onBack }) {
             paperId={paperId}
             paper={paper}
             onMessagesUpdated={handleMessagesUpdated}
-            onSaveInsight={() => setShowInsightForm(true)}
+            onSaveInsight={(msg) => {
+              setInsightSeed({ source_paper_id: paperId, source_message_id: msg?.id || '' });
+              setShowInsightForm(true);
+            }}
           />
         </div>
       </div>
@@ -551,7 +567,7 @@ export default function PaperDetail({ paperId, onBack }) {
       {/* Insight form modal */}
       {showInsightForm && (
         <InsightForm
-          insight={{ source_paper_id: paperId }}
+          insight={insightSeed}
           papers={papers.length > 0 ? papers : [paper]}
           onSave={async (data) => {
             await insightsApi.create(data);
@@ -559,6 +575,24 @@ export default function PaperDetail({ paperId, onBack }) {
             insightsApi.related(paperId).then(setRelatedInsights).catch(() => {});
           }}
           onCancel={() => setShowInsightForm(false)}
+        />
+      )}
+
+      {/* 洞察浮現卡（工單 18 §2 A2）。這裡的「去對話」多半就是本頁，直接發跳訊號。 */}
+      {popoverId && (
+        <InsightPopover
+          insightId={popoverId}
+          onClose={() => setPopoverId(null)}
+          onGoChat={(targetPaperId, messageId) => {
+            requestMessageJump(messageId);
+            setPopoverId(null);
+            // 相關洞察可能出自別篇——那就得先換頁（訊號已經發了，ChatPanel 掛好就消化）
+            if (targetPaperId && targetPaperId !== paperId) onNavigate?.('detail', targetPaperId);
+          }}
+          onGoPaper={(targetPaperId) => {
+            setPopoverId(null);
+            if (targetPaperId && targetPaperId !== paperId) onNavigate?.('detail', targetPaperId);
+          }}
         />
       )}
     </div>

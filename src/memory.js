@@ -15,6 +15,7 @@ import { syncInsightFireAndForget } from './gateway.js';
 import { renderDirectionsBlock } from './directions.js';
 import { findRelatedInsights } from './search.js';
 import { findDuplicate, DEDUP_NEAR_THRESHOLD } from './dedup.js';
+import { computeInsightLinks } from './insightLinks.js';
 // 六個維度的唯一事實源（工單 08 §3.2）。routes/insights.js 檔尾已 export，別在這裡複製一份。
 import { DIMENSIONS } from './routes/insights.js';
 
@@ -293,7 +294,7 @@ function parseExtractResponse(raw) {
  */
 export async function extractInsights(paperId) {
   const messages = db.prepare(
-    'SELECT role, content FROM messages WHERE paper_id = ? ORDER BY seq ASC'
+    'SELECT id, role, content FROM messages WHERE paper_id = ? ORDER BY seq ASC'
   ).all(paperId);
 
   if (messages.length < 2) {
@@ -363,20 +364,29 @@ export async function extractInsights(paperId) {
 
     // Find source context: a snippet of the discussion containing keywords
     const keywords = entry.content.slice(0, 30);
-    const sourceContext = messages
-      .filter(m => m.content.includes(keywords.slice(0, 10)))
+    const matched = messages.filter(m => m.content.includes(keywords.slice(0, 10)));
+    const sourceContext = matched
       .slice(0, 2)
       .map(m => `[${m.role}] ${m.content.slice(0, 200)}`)
       .join('\n') || '';
+    // 工單 18 §2 A1：同一輪關鍵詞回找，順手把「最匹配的那一則 assistant 訊息」記下來，
+    // 浮現卡才跳得回去。撲空就留空字串——**絕不猜**（§3 紅線）。
+    const sourceMessageId = matched.find(m => m.role === 'assistant')?.id || '';
 
-    db.prepare(`INSERT INTO insights (id, dimension, title, content, source_paper_id, source_context, tags_json)
-      VALUES (?, ?, ?, ?, ?, ?, '[]')`).run(
+    db.prepare(`INSERT INTO insights (id, dimension, title, content, source_paper_id, source_context, source_message_id, tags_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, '[]')`).run(
       id, dimension,
       entry.content.slice(0, 80),
       entry.content,
       paperId,
-      sourceContext
+      sourceContext,
+      sourceMessageId
     );
+
+    // 聯想（§2 B1）：每插一條算一次，零 token。
+    try { computeInsightLinks(id); } catch (err) {
+      log('WARN', `[INSIGHT] link 計算失敗 ${id}: ${err.message?.slice(0, 120)}`);
+    }
 
     // outbox（契約 §五）：本地寫入成功後 fire-and-forget 出海到 gateway。
     // 絕不 await、絕不阻塞閱讀主流程；失敗留 synced_at IS NULL 靠啟動補傳。

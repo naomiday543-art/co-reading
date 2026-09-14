@@ -162,7 +162,7 @@ export default function App() {
         {page !== 'settings' && !detailReading && <Sidebar onNavigate={navigate} onRefresh={loadData} />}
         <main className={`cr-main flex-1 overflow-y-auto p-6 bg-bg${detailReading ? ' cr-main--reading' : ''}`}>
           {page === 'library' && <Library onNavigate={navigate} onRefresh={loadData} />}
-          {page === 'detail' && <PaperDetail paperId={paperId} onBack={() => navigate('library')} />}
+          {page === 'detail' && <PaperDetail paperId={paperId} onBack={() => navigate('library')} onNavigate={navigate} />}
           {/* 摘要對比（工單 09 §3.3）：sidebar 照常，不進 mobile tabbar */}
           {page === 'compare' && <Compare onNavigate={navigate} />}
           {page === 'insights' && <InsightsPanel onNavigate={navigate} />}

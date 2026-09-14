@@ -86,6 +86,10 @@ export const insightsApi = {
   update: (id, data) => request(`/insights/${id}`, { method: 'PATCH', body: data }),
   delete: (id) => request(`/insights/${id}`, { method: 'DELETE' }),
   related: (paperId) => request(`/insights/related?paper_id=${paperId}`),
+  // 工單 18：浮現卡的「相關洞察」（§2 B3）、兩個一次性維護端點（§2 A1／B1）
+  links: (id) => request(`/insights/${id}/links`),
+  backfillSources: () => request('/insights/backfill-sources', { method: 'POST', body: {} }),
+  relinkAll: () => request('/insights/relink-all', { method: 'POST', body: {} }),
 };
 
 /**

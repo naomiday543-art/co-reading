@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { streamChat, regenerateChat, continueChat, papersApi } from '../api';
 import { useStore, CHAT_FONT_PX, CHAT_FONT_LABELS, nextChatFontSize, thinkingLabel } from '../store';
+import { previousUserMessage } from '../lib/insight-source';
 import { formatRange, quotePreview } from '../lib/fulltext-offsets';
 import CarryoverPanel from './CarryoverPanel';
 
@@ -50,6 +51,11 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
   const pendingQuote = useStore(s => s.pendingQuote);
   const clearPendingQuote = useStore(s => s.clearPendingQuote);
   const requestQuoteJump = useStore(s => s.requestQuoteJump);
+  // 工單 18 §2 A2：洞察浮現卡按「去對話」 → 滾到那一則並閃一下（照工單 14 的 quoteJump 那套）
+  const messageJump = useStore(s => s.messageJump);
+  const clearMessageJump = useStore(s => s.clearMessageJump);
+  const [msgFlash, setMsgFlash] = useState(null);   // { id, ts }
+  const msgRefs = useRef({});
   const [expandedQuote, setExpandedQuote] = useState(null);
   const abortRef = useRef(null);
   const bottomRef = useRef(null);
@@ -259,6 +265,28 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
     }
   };
 
+  // 跳到某一則訊息（工單 18 §2 A2）。
+  // 從洞察頁按「去對話」時訊號先發、頁面才換，所以這裡要**等訊息載進來**才判斷：
+  // `messages` 還空著就什麼都不做（下一次 messages 變動再跑一次）；載好了卻找不到
+  // 那一則（被編輯／重生截掉了）就清掉訊號，免得一顆死訊號賴在 store 裡。
+  useEffect(() => {
+    if (!messageJump) return;
+    if (messages.length === 0) return;
+    const target = messages.find(m => m.id === messageJump.id);
+    if (!target) { clearMessageJump(); return; }
+    const el = msgRefs.current[messageJump.id];
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setMsgFlash({ id: messageJump.id, ts: messageJump.ts });
+    clearMessageJump();
+  }, [messageJump, messages, clearMessageJump]);
+
+  // 熄燈另外一顆（跟 FullTextView 同一個坑：綁在一起 cleanup 會把 timer 清掉，高亮永不滅）
+  useEffect(() => {
+    if (!msgFlash) return;
+    const timer = setTimeout(() => setMsgFlash(null), 1750);
+    return () => clearTimeout(timer);
+  }, [msgFlash]);
+
   // 聊天字級三檔（工單 06 §3.2）：走 CSS 變數，所以抽屜裡跟分欄裡是同一份
   const { chatFontSize, setChatFontSize } = useStore();
 
@@ -343,10 +371,11 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
           return (
             <div
               key={msg.id}
+              ref={el => { if (el) msgRefs.current[msg.id] = el; else delete msgRefs.current[msg.id]; }}
               className={`group p-3 max-w-[85%] ${isUser
                 ? 'chat-bubble-user ml-auto'
                 : 'chat-bubble-ai'
-              }`}
+              }${msgFlash?.id === msg.id ? ' cr-msg-flash' : ''}`}
             >
               {!isUser ? (
                 <div>
@@ -389,11 +418,12 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
                       </button>
                     )}
 
-                    {/* Save as insight */}
+                    {/* Save as insight —— 工單 18 §2 A1：帶上這一則的 id（表單存它）
+                        與它前面那一則 user 的 id（展示時用得到），洞察才記得住出處。 */}
                     {onSaveInsight && (
                       <button
                         className="text-xs text-faint hover:text-accent flex items-center gap-0.5 px-1.5 py-0.5 rounded-md hover:bg-surface-hover transition-colors"
-                        onClick={onSaveInsight}
+                        onClick={() => onSaveInsight(msg, previousUserMessage(messages, idx))}
                         title="將這段回覆存為洞察"
                       >
                         存為洞察
