@@ -191,6 +191,12 @@ if (!columnExists('messages', 'edited')) {
 if (!columnExists('messages', 'edit_branches')) {
   db.exec(`ALTER TABLE messages ADD COLUMN edit_branches TEXT`);
 }
+// 工單 14 §3.1：選段引用。JSON `{text, start, end, page}`，start/end 是 full_text 的字元偏移
+// （page 先留 null，等工單 13 的 text_meta.pages 進來再回填）。
+// **`content` 仍然只存她打的字**——引用另存這一欄，才不會污染搜尋與洞察提取（§4 紅線）。
+if (!columnExists('messages', 'quote')) {
+  db.exec(`ALTER TABLE messages ADD COLUMN quote TEXT DEFAULT ''`);
+}
 
 // ── Idempotent migration: insights outbox columns (gateway sync, M3.b) ──
 // external_ombre_id = research-gateway 回填的記憶 id（契約 §二 ombre_id / §六 對應）。
