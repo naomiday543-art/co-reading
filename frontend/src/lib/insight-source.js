@@ -35,6 +35,21 @@ export function excerpt(text, chars = SOURCE_EXCERPT_CHARS) {
 }
 
 /**
+ * 分數 → 三檔文字（§2 B3）。
+ *
+ * 刻度來自她真資料：分數是「bm25 對自己查自己正規化」的比值，近重複落在
+ * 0.55–0.65（#5↔#9 = 0.58、#6↔#10 = 0.62，2026-09-14 唯讀副本），所以 0.55 以上
+ * 叫「很像」；門檻 0.35 以上、0.42 以下是「略有關」。
+ */
+export function scoreLabel(score) {
+  const n = Number(score);
+  if (!Number.isFinite(n)) return '略有關';
+  if (n >= 0.55) return '很像';
+  if (n >= 0.42) return '有關';
+  return '略有關';
+}
+
+/**
  * 往歷史堆疊推一張卡。超過 `HISTORY_MAX` 從最舊的那端丟。
  * 同一個 id 連點兩下不重複推（不然「←」要按兩次才動）。
  */

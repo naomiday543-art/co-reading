@@ -1,12 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { insightsApi } from '../api';
-import { describeSourceBlock, excerpt } from '../lib/insight-source';
+import {
+  describeSourceBlock,
+  excerpt,
+  scoreLabel,
+  pushHistory,
+  popHistory,
+} from '../lib/insight-source';
 
 // 工單 18 §2 A2：點洞察卡片浮出來的那張卡。
 // 桌機是置中的 popover，窄螢幕是貼底的抽屜（CSS 在 index.html 的 .cr-insight-pop*）。
 //
-// 三段：上＝洞察本身；中＝出自的對話（一問一答，可展開全文）；下＝動作。
-// （底部的「相關洞察」等 B 部分的聯想做完再掛上來。）
+// 三段：上＝洞察本身；中＝出自的對話（一問一答，可展開全文）；下＝動作＋相關洞察。
+// 相關洞察點下去**換成那一張卡**（同一個元件換 id），「←」回上一張，最多 10 層。
 
 const DIMENSIONS = {
   '概念': { soft: 'var(--fact-soft)', fg: 'var(--fact)' },
@@ -38,21 +44,27 @@ export default function InsightPopover({
   onDelete,
 }) {
   const [currentId, setCurrentId] = useState(insightId);
+  const [history, setHistory] = useState([]);
   const [detail, setDetail] = useState(null);
+  const [links, setLinks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [expanded, setExpanded] = useState(false);
 
-  useEffect(() => { setCurrentId(insightId); }, [insightId]);
+  useEffect(() => { setCurrentId(insightId); setHistory([]); }, [insightId]);
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
     setError('');
     setExpanded(false);
-    insightsApi.get(currentId).then(d => {
+    Promise.all([
+      insightsApi.get(currentId),
+      insightsApi.links(currentId).catch(() => []),
+    ]).then(([d, l]) => {
       if (!alive) return;
       setDetail(d);
+      setLinks(Array.isArray(l) ? l : []);
       setLoading(false);
     }).catch(err => {
       if (!alive) return;
@@ -69,6 +81,18 @@ export default function InsightPopover({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  const openRelated = useCallback((id) => {
+    setHistory(h => pushHistory(h, currentId));
+    setCurrentId(id);
+  }, [currentId]);
+
+  const goBack = useCallback(() => {
+    const { stack, id } = popHistory(history);
+    if (!id) return;
+    setHistory(stack);
+    setCurrentId(id);
+  }, [history]);
+
   const source = describeSourceBlock(detail);
   const answerText = source.answer
     ? (expanded ? { text: source.answer.content, truncated: false } : excerpt(source.answer.content))
@@ -84,6 +108,15 @@ export default function InsightPopover({
           <>
             {/* ── 上：洞察本身 ───────────────────────────────── */}
             <div className="flex items-start gap-2 mb-2">
+              {history.length > 0 && (
+                <button
+                  className="text-sm text-faint hover:text-accent px-1 -ml-1 shrink-0"
+                  onClick={goBack}
+                  title="回上一張"
+                >
+                  ←
+                </button>
+              )}
               <Pill dim={detail.dimension} />
               <h3 className="cr-serif text-base font-semibold text-text-strong flex-1 min-w-0">
                 {detail.title}
@@ -193,6 +226,33 @@ export default function InsightPopover({
               )}
             </div>
 
+            {/* ── 底：相關洞察（§2 B3）────────────────────────── */}
+            {links.length > 0 && (
+              <div className="border-t border-border-soft pt-3 mt-3">
+                <h4 className="text-xs font-semibold text-muted mb-2">相關洞察（{links.length}）</h4>
+                <div className="space-y-1.5">
+                  {links.map(({ insight, score, reason }) => (
+                    <button
+                      key={insight.id}
+                      className="cr-insight-pop-link"
+                      onClick={() => openRelated(insight.id)}
+                    >
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <Pill dim={insight.dimension} />
+                        <span className="cr-serif text-[13px] font-semibold text-text-strong truncate flex-1 min-w-0 text-left">
+                          {insight.title}
+                        </span>
+                        <span className="text-[10.5px] text-faint shrink-0">{scoreLabel(score)}</span>
+                      </div>
+                      {reason && <p className="text-[11.5px] text-muted text-left leading-relaxed">{reason}</p>}
+                      {insight.source_paper_title && (
+                        <p className="text-[11px] text-faint text-left truncate">{insight.source_paper_title}</p>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>

@@ -23,6 +23,21 @@ function Pill({ dim }) {
   );
 }
 
+/** 「相關 N」小標（工單 18 §2 B3）。N=0 不顯示——沒連線就不要在卡片上留一個 0。 */
+function LinkBadge({ count }) {
+  const n = Number(count) || 0;
+  if (n <= 0) return null;
+  return (
+    <span
+      className="cr-mono text-[10px] px-1.5 py-0.5 rounded-full shrink-0"
+      style={{ background: 'var(--surface-alt)', color: 'var(--muted)' }}
+      title={`有 ${n} 條相關洞察`}
+    >
+      相關 {n}
+    </span>
+  );
+}
+
 export default function InsightCard({ insight, onClick, onEdit, onDelete, compact }) {
   if (compact) {
     return (
@@ -32,7 +47,8 @@ export default function InsightCard({ insight, onClick, onEdit, onDelete, compac
       >
         <div className="flex items-center gap-2 mb-1">
           <Pill dim={insight.dimension} />
-          <span className="cr-serif text-sm font-semibold text-text-strong truncate">{insight.title}</span>
+          <span className="cr-serif text-sm font-semibold text-text-strong truncate flex-1 min-w-0">{insight.title}</span>
+          <LinkBadge count={insight.link_count} />
         </div>
         <p className="text-xs text-muted line-clamp-2 leading-relaxed">{insight.content}</p>
       </div>
@@ -51,7 +67,8 @@ export default function InsightCard({ insight, onClick, onEdit, onDelete, compac
             {insight.title}
           </h4>
         </div>
-        <div className="flex gap-1.5 shrink-0 ml-2">
+        <div className="flex items-center gap-1.5 shrink-0 ml-2">
+          <LinkBadge count={insight.link_count} />
           {onEdit && (
             <button
               className="text-xs text-faint hover:text-accent"

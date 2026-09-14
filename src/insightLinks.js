@@ -229,6 +229,38 @@ export function listLinkRows(insightId, database = db) {
   `).all(insightId, insightId);
 }
 
+/**
+ * 一條洞察的連線（給 `GET /api/insights/:id/links`）。**一趟 SQL**，不 N+1。
+ */
+export function listInsightLinks(insightId, database = db) {
+  return database.prepare(`
+    SELECT
+      other.id             AS id,
+      other.dimension      AS dimension,
+      other.title          AS title,
+      other.content        AS content,
+      p.title              AS source_paper_title,
+      other.source_paper_id AS source_paper_id,
+      l.score              AS score,
+      l.reason             AS reason
+    FROM insight_links l
+    JOIN insights other ON other.id = CASE WHEN l.a = ? THEN l.b ELSE l.a END
+    LEFT JOIN papers p ON p.id = other.source_paper_id
+    WHERE l.a = ? OR l.b = ?
+    ORDER BY l.score DESC
+  `).all(insightId, insightId, insightId).map(row => ({
+    insight: {
+      id: row.id,
+      dimension: row.dimension,
+      title: row.title,
+      content: row.content,
+      source_paper_id: row.source_paper_id,
+      source_paper_title: row.source_paper_title || null,
+    },
+    score: row.score,
+    reason: row.reason || '',
+  }));
+}
 
 // ── B2「為什麼相關」：預設關，開了才打上游 ─────────────────────────────
 

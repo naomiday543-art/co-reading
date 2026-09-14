@@ -4,44 +4,59 @@ import db from '../db.js';
 import { log } from '../logger.js';
 import { findRelatedInsights } from '../search.js';
 import { resolveSourceMessageId, loadSourceConversation, backfillInsightSources } from '../insightSource.js';
-import { computeInsightLinks, relinkAll } from '../insightLinks.js';
+import { computeInsightLinks, relinkAll, listInsightLinks } from '../insightLinks.js';
 
 const router = Router();
 
 const DIMENSIONS = ['概念', '延伸', '你的研究', '闪回', '共振', '悬题'];
 
+/**
+ * 列表用的一趟 SQL（工單 18 §2 B3：`link_count` 要 LEFT JOIN 算，別 N+1）。
+ * 順手把「來源論文標題」也 JOIN 進來——本來是每條洞察一次 `paperStmt.get`。
+ * `insight_links` 是無向表，一條洞察的連線數＝它出現在 a 或 b 的次數。
+ */
+const LIST_SELECT = `
+  SELECT i.*, p.title AS source_paper_title, COALESCE(lc.cnt, 0) AS link_count
+  FROM insights i
+  LEFT JOIN papers p ON p.id = i.source_paper_id
+  LEFT JOIN (
+    SELECT id, COUNT(*) AS cnt FROM (
+      SELECT a AS id FROM insight_links
+      UNION ALL
+      SELECT b AS id FROM insight_links
+    ) GROUP BY id
+  ) lc ON lc.id = i.id
+  WHERE 1=1
+`;
+
+function shape(row) {
+  return {
+    ...row,
+    tags_json: JSON.parse(row.tags_json || '[]'),
+    source_message_id: row.source_message_id || '',
+    source_paper_title: row.source_paper_title || null,
+  };
+}
+
 // GET /api/insights
 router.get('/insights', (req, res) => {
   const { dimension, source_paper_id } = req.query;
 
-  let query = 'SELECT * FROM insights WHERE 1=1';
+  let query = LIST_SELECT;
   const params = [];
 
   if (dimension) {
-    query += ' AND dimension = ?';
+    query += ' AND i.dimension = ?';
     params.push(dimension);
   }
   if (source_paper_id) {
-    query += ' AND source_paper_id = ?';
+    query += ' AND i.source_paper_id = ?';
     params.push(source_paper_id);
   }
 
-  query += ' ORDER BY updated_at DESC';
+  query += ' ORDER BY i.updated_at DESC';
 
-  const insights = db.prepare(query).all(...params);
-
-  // Attach source paper title for display
-  const paperStmt = db.prepare('SELECT id, title FROM papers WHERE id = ?');
-  const result = insights.map(ins => {
-    const paper = paperStmt.get(ins.source_paper_id);
-    return {
-      ...ins,
-      tags_json: JSON.parse(ins.tags_json || '[]'),
-      source_paper_title: paper?.title || null,
-    };
-  });
-
-  res.json(result);
+  res.json(db.prepare(query).all(...params).map(shape));
 });
 
 // GET /api/insights/related?paper_id=...
@@ -62,10 +77,13 @@ router.get('/insights/related', (req, res) => {
   const combined = [...ownInsights, ...related].slice(0, 10);
 
   const paperStmt = db.prepare('SELECT id, title FROM papers WHERE id = ?');
+  const countStmt = db.prepare('SELECT COUNT(*) AS n FROM insight_links WHERE a = ? OR b = ?');
   const result = combined.map(ins => ({
     ...ins,
     tags_json: JSON.parse(ins.tags_json || '[]'),
+    source_message_id: ins.source_message_id || '',
     source_paper_title: paperStmt.get(ins.source_paper_id)?.title || null,
+    link_count: countStmt.get(ins.id, ins.id).n,
     score: ins.score,
   }));
 
@@ -83,12 +101,21 @@ router.post('/insights/relink-all', (req, res) => {
   res.json({ ok: true, total, links });
 });
 
+// GET /api/insights/:id/links —— 一條洞察的相關洞察（工單 18 §2 B3）
+router.get('/insights/:id/links', (req, res) => {
+  const insight = db.prepare('SELECT id FROM insights WHERE id = ?').get(req.params.id);
+  if (!insight) return res.status(404).json({ error: '洞察不存在' });
+  res.json(listInsightLinks(req.params.id));
+});
+
 // GET /api/insights/:id
 router.get('/insights/:id', (req, res) => {
   const insight = db.prepare('SELECT * FROM insights WHERE id = ?').get(req.params.id);
   if (!insight) return res.status(404).json({ error: '洞察不存在' });
 
   const paper = db.prepare('SELECT id, title FROM papers WHERE id = ?').get(insight.source_paper_id);
+  const linkCount = db.prepare('SELECT COUNT(*) AS n FROM insight_links WHERE a = ? OR b = ?')
+    .get(insight.id, insight.id).n;
 
   // 工單 18 §2 A2：浮現卡中段要的「那一問一答」一次拿齊，前端不用再打第二趟。
   const { source_message, source_question } = loadSourceConversation(insight);
@@ -98,6 +125,7 @@ router.get('/insights/:id', (req, res) => {
     tags_json: JSON.parse(insight.tags_json || '[]'),
     source_message_id: insight.source_message_id || '',
     source_paper_title: paper?.title || null,
+    link_count: linkCount,
     source_message,
     source_question,
   });
@@ -128,7 +156,7 @@ router.post('/insights', (req, res) => {
 
   log('INFO', `洞察已創建: ${id} [${dim}] ${title.trim().slice(0, 40)}`);
 
-  // 聯想（§2 B1）：零 token、同步一個 FTS 查詢。
+  // 聯想（§2 B1）：零 token、同步一個 FTS 查詢；reason 那段不等（預設也不會跑）。
   computeInsightLinks(id);
 
   const insight = db.prepare('SELECT * FROM insights WHERE id = ?').get(id);
