@@ -213,6 +213,14 @@ if (!columnExists('tree_nodes', 'description')) {
   db.exec(`ALTER TABLE tree_nodes ADD COLUMN description TEXT NOT NULL DEFAULT ''`);
 }
 
+// ── Idempotent migration: papers.text_meta（工單 13 §3.2／§3.3）──
+// 抽字的「後設資料」：參考文獻區塊在哪（送模型前切掉用）＋每頁抽字品質（壞頁要告訴模型）。
+// JSON 字串，空字串＝還沒算過（GET /api/papers/:id 會 lazy 補，也可手動 rebuild）。
+// **推導資料**，隨時可砍掉重算；事實源是 papers.full_text 與 PDF 本身，那兩個都不因此改動。
+if (!columnExists('papers', 'text_meta')) {
+  db.exec(`ALTER TABLE papers ADD COLUMN text_meta TEXT NOT NULL DEFAULT ''`);
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS message_branches (
     id TEXT PRIMARY KEY,

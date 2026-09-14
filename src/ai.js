@@ -3,7 +3,7 @@ import db from './db.js';
 import { log } from './logger.js';
 import { searchInsights } from './search.js';
 import { readFileSync, statSync } from 'fs';
-import { renderVisualPages } from './pdf.js';
+import { renderVisualPages, locateReferencesBlock, parseTextMeta } from './pdf.js';
 import { renderCarryoverForInjection } from './carryover.js';
 import { opencodeSessionHeaders } from './opencodeSession.js';
 import { loadConstitution } from './constitution.js';
@@ -875,8 +875,8 @@ export function extractAnalyzeJson(config, data) {
   }
 }
 
-async function buildAnalyzeUserContent(config, fullText, pdfPath) {
-  const text = clipFullText(fullText);
+async function buildAnalyzeUserContent(config, fullText, pdfPath, textMeta) {
+  const { text } = prepareFullTextForModel(fullText, textMeta);
   if (!pdfPath || !isVisionEnabled(config)) return text;
 
   if (config.format === 'anthropic') {
@@ -940,7 +940,7 @@ async function buildAnalyzeUserContent(config, fullText, pdfPath) {
  * @param {number} [options.timeoutMs] 覆蓋單次請求的總逾時（預設 REQUEST_TIMEOUT_MS）
  */
 export async function analyzePaper(fullText, {
-  pdfPath, paperId, idleTimeoutMs, timeoutMs, retries, retryDelayMs,
+  pdfPath, paperId, idleTimeoutMs, timeoutMs, retries, retryDelayMs, textMeta,
 } = {}) {
   const config = getAnalyzeConfig();
   const idleMs = idleTimeoutMs ?? resolveAnalyzeIdleTimeoutMs();
@@ -949,7 +949,7 @@ export async function analyzePaper(fullText, {
   const delayMs = retryDelayMs ?? ANALYZE_RETRY_DELAY_MS;
   const tag = paperId || 'unknown';
   // 視覺筆記只做一次：它自己也要打一次上游，不該跟著主請求重試燒兩遍。
-  const userContent = await buildAnalyzeUserContent(config, fullText, pdfPath);
+  const userContent = await buildAnalyzeUserContent(config, fullText, pdfPath, textMeta);
 
   const messages = [
     {
@@ -1048,9 +1048,70 @@ export function clipFullText(fullText, limit = resolvePaperFulltextLimit()) {
   return text.length > limit ? `${text.slice(0, limit)}\n[全文已截斷]` : text;
 }
 
+/**
+ * 要不要在送模型前切掉參考文獻區塊（工單 13 §3.2）。預設開；`CUT_REFERENCES=false` 關。
+ * 她的原話是「參考文獻就不用讀了」——那一段在她八篇裡佔 840–61,568 字，白佔窗口。
+ */
+export function resolveCutReferences() {
+  const raw = process.env.CUT_REFERENCES;
+  if (raw === undefined || raw === null || `${raw}`.trim() === '') return true;
+  return !['0', 'false', 'off', 'no'].includes(`${raw}`.trim().toLowerCase());
+}
+
+/**
+ * 送模型前把參考文獻區塊換成一行「[參考文獻 N 字已略去]」。
+ *
+ * **只動送出去的那份文字**：`papers.full_text` 原文一個字不改（閱讀模式看到的、
+ * 工單 14 的選段偏移算的，都是原文）。位置優先用上傳時算好的 `text_meta`，
+ * 但一定要先驗「那個位置真的是那個標題」——全文被重新抽取過的話舊偏移會是錯的，
+ * 錯的偏移會從正文中間挖掉一塊，比不切嚴重得多。驗不過就當場重算。
+ *
+ * @returns {{text: string, cut: boolean, chars: number, reason: string}}
+ */
+export function stripReferences(fullText, textMeta) {
+  const text = `${fullText ?? ''}`;
+  if (!resolveCutReferences()) return { text, cut: false, chars: 0, reason: 'disabled' };
+
+  const meta = parseTextMeta(textMeta);
+  const recorded = meta?.references;
+  const usable = recorded?.cut
+    && Number.isInteger(recorded.start) && Number.isInteger(recorded.end)
+    && recorded.start >= 0 && recorded.end > recorded.start && recorded.end <= text.length
+    && (!recorded.heading
+      || text.slice(recorded.start, recorded.start + recorded.heading.length).toLowerCase()
+        === `${recorded.heading}`.toLowerCase());
+
+  const block = usable ? recorded : locateReferencesBlock(text);
+  if (!block.cut) return { text, cut: false, chars: 0, reason: block.reason || 'no_heading' };
+
+  const chars = block.end - block.start;
+  const marker = `[參考文獻 ${chars.toLocaleString('en-US')} 字已略去]\n`;
+  return {
+    text: text.slice(0, block.start) + marker + text.slice(block.end),
+    cut: true,
+    chars,
+    reason: 'ok',
+  };
+}
+
+/**
+ * 全文 → 送模型的那份：先切參考文獻，再套上限。順序不能反——先切才省得下截斷。
+ */
+export function prepareFullTextForModel(fullText, textMeta) {
+  const stripped = stripReferences(fullText, textMeta);
+  const limit = resolvePaperFulltextLimit();
+  return {
+    text: clipFullText(stripped.text, limit),
+    refsCut: stripped.cut,
+    refsChars: stripped.chars,
+    refsReason: stripped.reason,
+    truncated: stripped.text.length > limit,
+  };
+}
+
 // 論文區塊：標題/作者/年份/AI 摘要/全文。措辭逐字沿用工單 05 之前的 stableSystem，只是拿掉了身份句。
 export function buildPaperBlock(paper) {
-  const fullText = clipFullText(paper.full_text);
+  const { text: fullText } = prepareFullTextForModel(paper.full_text, paper.text_meta);
 
   return `以下是這篇論文的信息：
 標題：${paper.title}

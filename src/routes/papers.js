@@ -4,7 +4,7 @@ import { nanoid } from 'nanoid';
 import { join } from 'path';
 import { unlinkSync, existsSync } from 'fs';
 import db from '../db.js';
-import { extractPDF } from '../pdf.js';
+import { extractPDF, buildTextMeta, parseTextMeta } from '../pdf.js';
 import { analyzePaper, resolvePaperFulltextLimit } from '../ai.js';
 import { log } from '../logger.js';
 import { extractInsights } from '../memory.js';
@@ -50,6 +50,8 @@ router.post('/upload', upload.array('files'), async (req, res) => {
 
       log('INFO', `PDF 上傳成功: ${id} (${file.originalname}, ${(file.size / 1024 / 1024).toFixed(1)}MB)`);
 
+      if (fullText) saveTextMeta(id, fullText);
+
       results.push({ id, title: file.originalname, status: 'unread', analyze_status: 'pending', scanned: !fullText });
 
       // If scanned PDF, mark as error immediately
@@ -69,6 +71,44 @@ router.post('/upload', upload.array('files'), async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+/**
+ * 算出並存下這篇論文的 `text_meta`（工單 13 §3.2／§3.3）。
+ *
+ * 只寫 `text_meta` 一欄——`full_text` 原文永遠不動（閱讀模式與工單 14 的選段偏移
+ * 都以原文為準）。算不出來不是致命傷：切不掉參考文獻就照舊全文送，不要因此讓上傳失敗。
+ *
+ * @param {string} paperId
+ * @param {string} fullText
+ * @param {Array} [pageMeta] 頁級品質（`extractPDF` 的第二個產物）
+ * @returns {object|null} 存下去的 meta
+ */
+function saveTextMeta(paperId, fullText, pageMeta = []) {
+  try {
+    const meta = buildTextMeta(fullText, pageMeta);
+    db.prepare('UPDATE papers SET text_meta = ? WHERE id = ?').run(JSON.stringify(meta), paperId);
+    const refs = meta.references;
+    log('INFO', `[TEXTMETA] paper=${paperId} refs_cut=${refs.cut}`
+      + ` reason=${refs.reason} start=${refs.start} chars=${refs.chars}`
+      + ` density=${refs.density}/1000 pages=${meta.pages.length}`
+      + ` bad_pages=${meta.bad_pages.length > 0 ? meta.bad_pages.join(',') : 'none'}`);
+    return meta;
+  } catch (err) {
+    log('WARN', `[TEXTMETA] paper=${paperId} 失敗（不影響通讀，只是少了切參考文獻與品質提示）: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * 讀 `text_meta`，沒有就當場算一次並回寫（既有論文的補算路徑，工單 13 §3.2）。
+ * 只補參考文獻那半——頁級品質要重新解析 PDF，那條路走 `POST /:id/text-meta/rebuild`。
+ */
+function ensureTextMeta(paper, paperId) {
+  const existing = parseTextMeta(paper.text_meta);
+  if (existing) return existing;
+  if (!paper.full_text) return null;
+  return saveTextMeta(paperId, paper.full_text);
+}
 
 /**
  * 啟動時把「上次進程死掉時還在通讀」的論文從 analyzing 收掉。
@@ -97,7 +137,7 @@ async function triggerAnalyze(paperId) {
     log('INFO', `開始 AI 通讀: ${paperId}`);
 
     const startTime = Date.now();
-    const paper = db.prepare('SELECT full_text, pdf_filename FROM papers WHERE id = ?').get(paperId);
+    const paper = db.prepare('SELECT full_text, pdf_filename, text_meta FROM papers WHERE id = ?').get(paperId);
     if (!paper || !paper.full_text) {
       throw new Error('論文沒有全文');
     }
@@ -109,6 +149,8 @@ async function triggerAnalyze(paperId) {
       pdfPath: pdfPath && existsSync(pdfPath) ? pdfPath : undefined,
       // 只是讓 [ANALYZE] 日誌指得出是哪一篇（觀察哨：grep '\[ANALYZE\]' data/app.log）。
       paperId,
+      // 參考文獻位置與壞頁清單（工單 13）。舊論文還沒算過就交白卷，ai.js 會當場重算。
+      textMeta: ensureTextMeta(paper, paperId),
     });
 
     db.prepare(`UPDATE papers SET
@@ -214,6 +256,8 @@ router.get('/:id', (req, res) => {
   // 截斷邏輯在 clipFullText，這裡只是報告同一個判斷（工單 13 §3.1 起上限可調）。
   const fullTextChars = paper.full_text?.length || 0;
   const limit = resolvePaperFulltextLimit();
+  // text_meta 是 lazy 的：舊論文（上傳時還沒有這個欄位）第一次被打開時補算並回寫。
+  const textMeta = ensureTextMeta(paper, paper.id);
 
   res.json({
     ...paper,
@@ -222,6 +266,7 @@ router.get('/:id', (req, res) => {
     full_text_chars: fullTextChars,
     full_text_truncated: fullTextChars > limit,
     full_text_limit: limit,
+    text_meta: textMeta,
   });
 });
 
@@ -292,6 +337,20 @@ router.post('/:id/analyze', (req, res) => {
 
   triggerAnalyze(paper.id);
   res.json({ ok: true, analyze_status: 'analyzing' });
+});
+
+// POST /api/papers/:id/text-meta/rebuild —— 重算參考文獻位置與頁級品質（工單 13 §3.2）
+//
+// 什麼時候會用到：切錯了（她說模型讀不到某段）、換了偵測規則、或想把舊論文的
+// 頁級品質補上——那需要重新解析 PDF，所以跟 GET 的 lazy 路徑分開，由她主動觸發。
+router.post('/:id/text-meta/rebuild', async (req, res) => {
+  const paper = db.prepare('SELECT id, full_text, pdf_filename FROM papers WHERE id = ?').get(req.params.id);
+  if (!paper) return res.status(404).json({ error: '論文不存在' });
+  if (!paper.full_text) return res.status(400).json({ error: '此論文沒有提取到文本' });
+
+  const meta = saveTextMeta(paper.id, paper.full_text);
+  if (!meta) return res.status(500).json({ error: 'text_meta 重算失敗' });
+  res.json({ ok: true, text_meta: meta });
 });
 
 // POST /api/papers/:id/extract-insights
