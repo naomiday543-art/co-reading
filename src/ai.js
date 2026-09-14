@@ -218,7 +218,9 @@ function combineSignals(timeoutMs, external) {
   return controller.signal;
 }
 
-async function makeRequest(config, params) {
+// export：工單 18 §2 B2 的「為什麼相關」要沿用同一條出海路徑（逾時、abort 合成、
+// 4xx 量字數），不另造一份。行為一字未改。
+export async function makeRequest(config, params) {
   const url = buildEndpoint(config);
   const headers = buildHeaders(config);
   const body = buildBody(config, params);

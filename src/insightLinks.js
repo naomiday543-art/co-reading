@@ -13,6 +13,7 @@
 // relink-all 用 `MAX(score)` 合併兩個方向 ⇒ **與處理順序無關、兩次結果一致**（§4.5 冪等）。
 import db from './db.js';
 import { log } from './logger.js';
+import { getChatConfig, makeRequest, collectStream, responseText, describeAnalyzeError } from './ai.js';
 
 // ── 參數（全部可 env 調；預設值是工單 §2 B1 拍板值）──────────────────
 export const LINK_MIN_SCORE_DEFAULT = 0.35;
@@ -27,6 +28,10 @@ export const LINK_TERM_LEN = 5;
 export const LINK_TERM_STEP = 3;
 export const LINK_MAX_TERMS = 80;
 
+/** B2：一次 relink-all 最多問幾對「為什麼相關」（§2 B2）。 */
+export const LINK_REASON_BATCH_MAX = 20;
+export const LINK_REASON_MAX_CHARS = 40;
+
 export function resolveLinkMinScore(env = process.env) {
   const raw = Number(env.INSIGHT_LINK_MIN_SCORE);
   if (!Number.isFinite(raw)) return LINK_MIN_SCORE_DEFAULT;
@@ -37,6 +42,12 @@ export function resolveLinkMax(env = process.env) {
   const raw = Number(env.INSIGHT_LINK_MAX);
   if (!Number.isFinite(raw) || raw < 1) return LINK_MAX_DEFAULT;
   return Math.min(LINK_MAX_CEIL, Math.floor(raw));
+}
+
+/** 「為什麼相關」**預設關**（§2 B2）。只有明確寫 true/1 才打上游。 */
+export function resolveLinkReasonEnabled(env = process.env) {
+  const raw = String(env.INSIGHT_LINK_REASON ?? '').trim().toLowerCase();
+  return raw === 'true' || raw === '1' || raw === 'yes';
 }
 
 /** a<b 正規化（無向）。同一個 id 回 null。 */
@@ -144,14 +155,17 @@ function upsertLink(database, a, b, score, method = 'fts') {
  * 但我查不到別人」的那種不對稱連線會在這裡掉一條，下次 relink-all（雙向 MAX）補回來。
  * 換到的是每次存洞察只跑一個 FTS 查詢，存的當下不卡。
  *
+ * @returns {{links:Array, reasonTask:Promise}} `reasonTask` 給測試 await；路由不等它。
  */
 export function computeInsightLinks(insightId, {
   database = db,
   minScore = resolveLinkMinScore(),
   max = resolveLinkMax(),
+  reasonEnabled = resolveLinkReasonEnabled(),
+  reasonConfig,
 } = {}) {
   const insight = database.prepare('SELECT id, title, content FROM insights WHERE id = ?').get(insightId);
-  if (!insight) return { links: [] };
+  if (!insight) return { links: [], reasonTask: Promise.resolve({ asked: 0, written: 0 }) };
 
   const candidates = scoreCandidates(insight, { database, minScore, max });
 
@@ -161,7 +175,12 @@ export function computeInsightLinks(insightId, {
   });
   apply();
 
-  return { links: listLinkRows(insightId, database) };
+  const links = listLinkRows(insightId, database);
+  const reasonTask = maybeGenerateReasons(
+    links.filter(l => !l.reason).map(l => ({ a: l.a, b: l.b })),
+    { database, reasonEnabled, config: reasonConfig },
+  );
+  return { links, reasonTask };
 }
 
 /**
@@ -174,6 +193,8 @@ export function relinkAll({
   database = db,
   minScore = resolveLinkMinScore(),
   max = resolveLinkMax(),
+  reasonEnabled = resolveLinkReasonEnabled(),
+  reasonConfig,
 } = {}) {
   const insights = database.prepare('SELECT id, title, content FROM insights ORDER BY rowid').all();
   const keptReasons = database.prepare("SELECT a, b, reason FROM insight_links WHERE reason != ''").all();
@@ -194,7 +215,9 @@ export function relinkAll({
   const linkCount = database.prepare('SELECT COUNT(*) AS n FROM insight_links').get().n;
   log('INFO', `[INSIGHT] relink total=${total} links=${linkCount}`);
 
-  return { total, links: linkCount };
+  const pending = database.prepare("SELECT a, b FROM insight_links WHERE reason = ''").all();
+  const reasonTask = maybeGenerateReasons(pending, { database, reasonEnabled, config: reasonConfig });
+  return { total, links: linkCount, reasonTask };
 }
 
 /** 一條洞察的所有連線列（原始列，含 a／b 兩欄）。 */
@@ -206,3 +229,84 @@ export function listLinkRows(insightId, database = db) {
   `).all(insightId, insightId);
 }
 
+
+// ── B2「為什麼相關」：預設關，開了才打上游 ─────────────────────────────
+
+export const LINK_REASON_SYSTEM =
+  '你是科研共讀助手。使用者會給你兩條研究洞察，請用一句話（不超過 40 字，繁體中文）'
+  + '說明它們為什麼相關——指出共同的對象、機制或問題。只輸出那一句話，不要前綴、不要標點編號。';
+
+export function buildReasonPrompt(one, two) {
+  return `洞察 A：${(one?.title || '').slice(0, 80)}\n${(one?.content || '').slice(0, 300)}\n\n`
+    + `洞察 B：${(two?.title || '').slice(0, 80)}\n${(two?.content || '').slice(0, 300)}\n\n`
+    + '它們為什麼相關？一句話。';
+}
+
+/** 模型有時候會裹上引號／「原因：」；剪乾淨並壓到 40 字。 */
+export function sanitizeReason(text) {
+  const line = String(text || '').replace(/\s+/g, ' ').trim()
+    .replace(/^[「"'『]+|[」"'』]+$/g, '')
+    .replace(/^(原因|理由|關聯|关联)[：:]\s*/, '')
+    .trim();
+  return line.slice(0, LINK_REASON_MAX_CHARS);
+}
+
+/**
+ * 批次問「為什麼相關」。
+ *
+ * - 關閉（預設）⇒ **一次 fetch 都不打**，直接回 `{asked:0, written:0, skipped:true}`（§4.6）。
+ * - 開啟 ⇒ 每次最多 `LINK_REASON_BATCH_MAX`（20）對；串流／逾時／錯誤分類全部沿用
+ *   `ai.js` 的 `makeRequest`／`collectStream`／`describeAnalyzeError`，不另造一份。
+ * - 任何一對失敗就**留空、不重試**（§2 B2）。
+ */
+export async function maybeGenerateReasons(pairs, {
+  database = db,
+  reasonEnabled = resolveLinkReasonEnabled(),
+  config,
+  batchMax = LINK_REASON_BATCH_MAX,
+} = {}) {
+  if (!reasonEnabled) return { asked: 0, written: 0, skipped: true };
+  const todo = (pairs || []).slice(0, batchMax);
+  if (todo.length === 0) return { asked: 0, written: 0, skipped: false };
+
+  const cfg = config || getChatConfig();
+  if (!cfg.key && !/127\.0\.0\.1|localhost/.test(cfg.baseUrl || '')) {
+    log('WARN', '[INSIGHT] link reason 開著但沒有 API key，跳過');
+    return { asked: 0, written: 0, skipped: true };
+  }
+
+  const get = database.prepare('SELECT id, title, content FROM insights WHERE id = ?');
+  const save = database.prepare('UPDATE insight_links SET reason = ? WHERE a = ? AND b = ?');
+
+  let asked = 0;
+  let written = 0;
+  for (const pair of todo) {
+    const one = get.get(pair.a);
+    const two = get.get(pair.b);
+    if (!one || !two) continue;
+    asked++;
+    try {
+      const response = await makeRequest({ ...cfg, scope: 'insight-link' }, {
+        messages: [
+          { role: 'system', content: LINK_REASON_SYSTEM },
+          { role: 'user', content: buildReasonPrompt(one, two) },
+        ],
+        stream: true,
+        max_tokens: 200,
+        temperature: 0.3,
+      });
+      const data = await collectStream(cfg, response);
+      const reason = sanitizeReason(responseText(cfg, data));
+      if (reason) {
+        save.run(reason, pair.a, pair.b);
+        written++;
+      }
+    } catch (err) {
+      log('WARN', `[INSIGHT] link reason 失敗 ${pair.a}↔${pair.b}: ${describeAnalyzeError(err)}`);
+      // 留空、不重試（§2 B2）
+    }
+  }
+
+  log('INFO', `[INSIGHT] link reason asked=${asked} written=${written}`);
+  return { asked, written, skipped: false };
+}
