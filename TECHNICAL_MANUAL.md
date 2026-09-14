@@ -451,6 +451,29 @@ cache 才命得中。歷史回放（`loadHistory()`，送出／重新生成／�
 
 ---
 
+### 9.5 上游線韌性盤點（2026-09-14）
+
+每一條會打上游（模型／gateway）的線，各自有沒有：總逾時、閒置逾時、自動重試、人話錯誤、日誌前綴。
+改任何一條線之前先看這張表，改完把表對上。**空格＝沒有，不是漏寫。**
+
+| 線 | 入口 | 串流 | 總逾時 | 閒置逾時 | 自動重試 | 人話錯誤 | 日誌 | 備註 |
+|---|---|---|---|---|---|---|---|---|
+| 通讀 | `analyzePaper` | ✅ | `AI_REQUEST_TIMEOUT_MS` 300s | `ANALYZE_IDLE_TIMEOUT_MS` 60s | `ANALYZE_RETRIES` 1，只對停滯／逾時／連線／429／5xx | ✅ 含 ctx_overflow | `[ANALYZE]` | 工單 10／13；啟動對帳把 `analyzing` 收成 error |
+| 視覺筆記（通讀前置） | `buildAnalyzeUserContent` → vision model | ✅ | 300s | — | —（失敗降級純文字，WARN） | 部分 | 沿用「PDF 視覺通讀失敗」 | 只在 `analyze_vision_mode=on` 且有 `pdftoppm` 時跑；目前 off |
+| 討論 | `chatAboutPaper` | ✅ 逐字 | 300s | `CHAT_IDLE_TIMEOUT_MS` 45s | `CHAT_RETRIES` 1，**只在首個正文字之前** | ✅ 帶 partial／hint | `[CHAT]` | 工單 12／14；停止鈕真的收上游；reasoning 只送字數 |
+| 洞察提取 | `memory.js callExtractAPI` | ✅ | 300s | — | — | ✅ 預算用盡 | `[EXTRACT]`（只在失敗與搶救時） | 工單 08；`EXTRACT_MAX_TOKENS` 4000 |
+| 多篇對比 | `compare.js` | ✅ | 300s | — | — | ✅ 對比請求超時 | `[COMPARE]` | 工單 09；`COMPARE_MAX_TOKENS` |
+| 研究續窗精煉 | `carryover.js` → gateway | 非串流 | 200s（gateway 內部 180s） | — | — | HTTP 分類 | 「精煉失敗」 | 走 gateway 不直打模型 |
+| 續窗讀取 | `carryover.js` fetch | — | 15s | — | — | — | — | |
+| 洞察出海 | `gateway.js syncInsight` | — | 15s | 啟動補傳 `flushUnsynced`（冪等） | — | — | 「洞察已出海」 | 失敗留 `synced_at IS NULL` |
+| 測試連線 | `testConnection` | 非串流 10 tokens | 300s | — | — | 原樣回錯 | — | 設定頁用；非串流在 OpenCode Go 60s 閘內 |
+
+已知的洞（未做，各自有喚醒條件）：
+
+- **通讀沒有併發上限**：`triggerAnalyze` fire-and-forget，一次傳 N 篇就同時跑 N 條（加上重試最壞 2N 次上游請求）。喚醒＝一次上傳超過三篇，或日誌出現多條 `[ANALYZE]` 交錯的 429。
+- **provider 拒絕沒有結構化 outcome**：8/31 工單 02／03 未實作（見 `docs/work/biomedical-safety-closeout-20260831.md` 補記）。喚醒＝換回會拒生醫內容的模型。
+- **視覺筆記與洞察提取沒有閒置逾時**：兩條都有 300s 總逾時兜底；視覺失敗會降級、提取失敗會報錯，不會卡死。喚醒＝日誌看到這兩條線靠 300s 才收尾。
+
 ## 10. 配置與部署
 
 ### 10.1 環境變量（`.env`）
