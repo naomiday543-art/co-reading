@@ -1,10 +1,94 @@
 import { Router } from 'express';
 import { nanoid } from 'nanoid';
 import db from '../db.js';
-import { chatAboutPaper } from '../ai.js';
+import { chatAboutPaper, ChatAbortedError } from '../ai.js';
 import { log } from '../logger.js';
 
 const router = Router();
+
+/** `thinking` 事件的節流間隔。推理鏈是逐 chunk 來的，不節流會變成每秒幾十發 SSE。 */
+const THINKING_THROTTLE_MS = 500;
+
+function sse(res, payload) {
+  if (res.writableEnded || res.destroyed) return;
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+function openStream(res) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+}
+
+/**
+ * 跑一輪討論並把事件推到 SSE 上。三個入口（正常送出／重新生成／繼續）共用。
+ *
+ * 這裡新增三件事（工單 12 §3.3／§3.4）：
+ * 1. `thinking`／`thinking_done`：**只送字數與秒數，不送思考內容**（§4 紅線）。
+ *    節流 500ms，正文第一個 delta 到時補一發 thinking_done 讓等待提示消失。
+ * 2. 她按「停止」或關掉頁面 ⇒ `req.on('close')` ⇒ AbortController ⇒ 上游那條連線也收掉，
+ *    不再替一個沒人看的答案付錢。取消不是故障：不寫 DB、不印紅框。
+ * 3. 失敗時 `error` 事件帶 `partial`（已吐正文長度）與 `hint`，前端據此保住半截。
+ *
+ * @returns {{ok: boolean, content: string, aborted: boolean}}
+ */
+async function runChatStream(res, { paper, history, userMessage, hint, label = '討論回覆' }) {
+  const controller = new AbortController();
+  // 掛 `res` 不是 `req`：Express 讀完 body 之後 `req` 立刻就 'close' 了（Node ≥16 的
+  // IncomingMessage 語意），掛在那邊會在打上游之前就自己把自己 abort 掉。
+  // `res` 的 'close' 才是「這條連線沒了」——正常結束時我們在 finally 先把它摘掉。
+  const onClose = () => controller.abort();
+  res.on('close', onClose);
+
+  const startedAt = Date.now();
+  let fullContent = '';
+  let reasoningChars = 0;
+  let lastThinkingAt = 0;
+  let thinkingDone = false;
+
+  try {
+    await chatAboutPaper(paper, history, userMessage, (chunk) => {
+      if (!thinkingDone) {
+        thinkingDone = true;
+        sse(res, {
+          type: 'thinking_done',
+          chars: reasoningChars,
+          seconds: Number(((Date.now() - startedAt) / 1000).toFixed(1)),
+        });
+      }
+      fullContent += chunk;
+      sse(res, { type: 'delta', content: chunk });
+    }, {
+      signal: controller.signal,
+      onReasoning: (text) => {
+        reasoningChars += text.length;
+        const now = Date.now();
+        if (now - lastThinkingAt < THINKING_THROTTLE_MS) return;
+        lastThinkingAt = now;
+        sse(res, { type: 'thinking', chars: reasoningChars });
+      },
+    });
+
+    return { ok: true, content: fullContent, aborted: false };
+  } catch (err) {
+    if (err instanceof ChatAbortedError || controller.signal.aborted) {
+      log('INFO', `討論中止: ${paper.id} — 已生成 ${fullContent.length} 字，未保存`);
+      return { ok: false, content: fullContent, aborted: true };
+    }
+    log('ERROR', `${label}失敗: ${paper.id} — ${err.message}`);
+    sse(res, {
+      type: 'error',
+      message: err.message,
+      partial: fullContent.length,
+      ...(hint ? { hint } : {}),
+    });
+    return { ok: false, content: fullContent, aborted: false };
+  } finally {
+    res.off('close', onClose);
+  }
+}
 
 function nextSeq(paperId) {
   const row = db.prepare(
@@ -45,8 +129,15 @@ router.post('/:id/chat', async (req, res) => {
     if (!lastAI) {
       return res.status(400).json({ error: '沒有可重新生成的 AI 回覆' });
     }
-    // Guard against orphan tail (e.g. interrupted continue/edit left a trailing user message)
-    if (allMsgs.length > 0 && allMsgs[allMsgs.length - 1].id !== lastAI.id) {
+    const lastMsg = allMsgs[allMsgs.length - 1];
+    if (lastMsg.id !== lastAI.id) {
+      // 孤兒 user 尾巴（上一輪串流失敗／被中止，問題寫進去了但回答沒有）。
+      // 工單 12 §3.2 二選一，選「放寬」：這時候她要的就是「把這個問題回答掉」，
+      // 也就是「繼續」。再叫她自己看懂一句 400 去換一顆按鈕是多一步。
+      // 完全沒有 AI 回覆過的那種（上面那個 400）維持原樣——那不是孤兒尾巴，是還沒開始。
+      if (lastMsg.role === 'user') {
+        return runContinue(res, { paper, paperId });
+      }
       return res.status(400).json({ error: '最後一條不是 AI 回覆，請改用「繼續」生成新回覆' });
     }
 
@@ -61,32 +152,20 @@ router.post('/:id/chat', async (req, res) => {
     const history = allMsgs.filter(m => m.seq < lastAI.seq).map(m => ({ role: m.role, content: m.content }));
 
     // Set up SSE
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    });
+    openStream(res);
 
-    let fullContent = '';
+    const outcome = await runChatStream(res, { paper, history, userMessage: null, label: '重新生成' });
 
-    try {
-      await chatAboutPaper(paper, history, null, (chunk) => {
-        fullContent += chunk;
-        res.write(`data: ${JSON.stringify({ type: 'delta', content: chunk })}\n\n`);
-      });
-
+    if (outcome.ok) {
       const newVersionId = nanoid();
-      versions.push({ id: newVersionId, content: fullContent, ts: Date.now() });
+      versions.push({ id: newVersionId, content: outcome.content, ts: Date.now() });
 
       db.prepare(
         'UPDATE messages SET content = ?, regen_versions = ?, regen_idx = ? WHERE id = ?'
-      ).run(fullContent, JSON.stringify(versions), versions.length - 1, lastAI.id);
+      ).run(outcome.content, JSON.stringify(versions), versions.length - 1, lastAI.id);
       log('INFO', `重新生成: ${paperId}, 版本 ${versions.length}/${versions.length}`);
 
-      res.write(`data: ${JSON.stringify({ type: 'done', message_id: newVersionId })}\n\n`);
-    } catch (err) {
-      log('ERROR', `重新生成失敗: ${paperId} — ${err.message}`);
-      res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`);
+      sse(res, { type: 'done', message_id: newVersionId });
     }
 
     res.end();
@@ -95,37 +174,7 @@ router.post('/:id/chat', async (req, res) => {
 
   // ── Continue mode ──
   if (continueChat) {
-    const history = getHistory(paperId);
-
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    });
-
-    let fullContent = '';
-
-    try {
-      await chatAboutPaper(paper, history, null, (chunk) => {
-        fullContent += chunk;
-        res.write(`data: ${JSON.stringify({ type: 'delta', content: chunk })}\n\n`);
-      });
-
-      const assistantMsgId = nanoid();
-      const seq = nextSeq(paperId);
-      db.prepare(
-        'INSERT INTO messages (id, paper_id, role, content, created_at, seq) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(assistantMsgId, paperId, 'assistant', fullContent, Date.now(), seq);
-      log('INFO', `繼續回覆: ${paperId}, assistant (${fullContent.length} 字)`);
-
-      res.write(`data: ${JSON.stringify({ type: 'done', message_id: assistantMsgId })}\n\n`);
-    } catch (err) {
-      log('ERROR', `繼續回覆失敗: ${paperId} — ${err.message}`);
-      res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`);
-    }
-
-    res.end();
-    return;
+    return runContinue(res, { paper, paperId });
   }
 
   // ── Default: normal send ──
@@ -143,36 +192,56 @@ router.post('/:id/chat', async (req, res) => {
   ).all(paperId);
 
   // Set up SSE
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
+  openStream(res);
+
+  // user 訊息在開串流之前就已經寫進 DB 了（上面幾行）。失敗時 assistant 不寫 ⇒ 留下
+  // 一條孤兒 user 尾巴，所以 error 事件要告訴她怎麼救回來。
+  const outcome = await runChatStream(res, {
+    paper,
+    history: history.slice(0, -1),
+    userMessage: message.trim(),
+    hint: '你的問題已保存——按「重新生成」或「繼續」都能讓 AI 接著回答',
   });
 
-  let fullContent = '';
-
-  try {
-    await chatAboutPaper(paper, history.slice(0, -1), message.trim(), (chunk) => {
-      fullContent += chunk;
-      res.write(`data: ${JSON.stringify({ type: 'delta', content: chunk })}\n\n`);
-    });
-
+  if (outcome.ok) {
     // Save assistant message
     const assistantMsgId = nanoid();
     const assistantSeq = nextSeq(paperId);
     db.prepare(
       'INSERT INTO messages (id, paper_id, role, content, created_at, seq) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(assistantMsgId, paperId, 'assistant', fullContent, Date.now(), assistantSeq);
-    log('INFO', `討論回覆: ${paperId}, assistant (${fullContent.length} 字)`);
+    ).run(assistantMsgId, paperId, 'assistant', outcome.content, Date.now(), assistantSeq);
+    log('INFO', `討論回覆: ${paperId}, assistant (${outcome.content.length} 字)`);
 
-    res.write(`data: ${JSON.stringify({ type: 'done', message_id: assistantMsgId })}\n\n`);
-  } catch (err) {
-    log('ERROR', `討論回覆失敗: ${paperId} — ${err.message}`);
-    res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`);
+    sse(res, { type: 'done', message_id: assistantMsgId });
   }
 
   res.end();
 });
+
+/**
+ * 「繼續」：不寫 user 訊息，直接就現有歷史生成一條新的 assistant。
+ * 編輯訊息後自動觸發，也是孤兒 user 尾巴的救援路徑（見上面 regenerate 的放寬）。
+ */
+async function runContinue(res, { paper, paperId }) {
+  const history = getHistory(paperId);
+
+  openStream(res);
+
+  const outcome = await runChatStream(res, { paper, history, userMessage: null, label: '繼續回覆' });
+
+  if (outcome.ok) {
+    const assistantMsgId = nanoid();
+    const seq = nextSeq(paperId);
+    db.prepare(
+      'INSERT INTO messages (id, paper_id, role, content, created_at, seq) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(assistantMsgId, paperId, 'assistant', outcome.content, Date.now(), seq);
+    log('INFO', `繼續回覆: ${paperId}, assistant (${outcome.content.length} 字)`);
+
+    sse(res, { type: 'done', message_id: assistantMsgId });
+  }
+
+  res.end();
+}
 
 // POST /api/papers/:id/chat/edit
 router.post('/:id/chat/edit', (req, res) => {
