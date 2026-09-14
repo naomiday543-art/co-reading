@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { streamChat, regenerateChat, continueChat, papersApi } from '../api';
 import { useStore, CHAT_FONT_PX, CHAT_FONT_LABELS, nextChatFontSize, thinkingLabel } from '../store';
+import { previousUserMessage } from '../lib/insight-source';
 import { formatRange, quotePreview } from '../lib/fulltext-offsets';
 import CarryoverPanel from './CarryoverPanel';
 
@@ -389,11 +390,12 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
                       </button>
                     )}
 
-                    {/* Save as insight */}
+                    {/* Save as insight —— 工單 18 §2 A1：帶上這一則的 id（表單存它）
+                        與它前面那一則 user 的 id（展示時用得到），洞察才記得住出處。 */}
                     {onSaveInsight && (
                       <button
                         className="text-xs text-faint hover:text-accent flex items-center gap-0.5 px-1.5 py-0.5 rounded-md hover:bg-surface-hover transition-colors"
-                        onClick={onSaveInsight}
+                        onClick={() => onSaveInsight(msg, previousUserMessage(messages, idx))}
                         title="將這段回覆存為洞察"
                       >
                         存為洞察

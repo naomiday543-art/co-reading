@@ -8,6 +8,9 @@ export default function InsightForm({ insight, papers, onSave, onCancel }) {
   const [content, setContent] = useState(insight?.content || '');
   const [sourcePaperId, setSourcePaperId] = useState(insight?.source_paper_id || '');
   const [sourceContext, setSourceContext] = useState(insight?.source_context || '');
+  // 工單 18 §2 A1：隱藏欄位——她不用看到、也不該手改，但編輯既有洞察時要原樣帶回去，
+  // 不然一次編輯就把出處洗掉了。
+  const [sourceMessageId] = useState(insight?.source_message_id || '');
   const [paperSearch, setPaperSearch] = useState('');
   const [showPaperDropdown, setShowPaperDropdown] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -39,6 +42,7 @@ export default function InsightForm({ insight, papers, onSave, onCancel }) {
         content: content.trim(),
         source_paper_id: sourcePaperId || null,
         source_context: sourceContext.trim(),
+        source_message_id: sourceMessageId,
         tags: [],
       });
     } finally {

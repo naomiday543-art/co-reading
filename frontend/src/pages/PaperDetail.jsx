@@ -37,6 +37,8 @@ export default function PaperDetail({ paperId, onBack }) {
   const [treeMenu, setTreeMenu] = useState(false);
   const [relatedInsights, setRelatedInsights] = useState([]);
   const [showInsightForm, setShowInsightForm] = useState(false);
+  // 工單 18 §2 A1：「存為洞察」帶進來的預填（來源論文＋那一則回覆的 id）
+  const [insightSeed, setInsightSeed] = useState({ source_paper_id: paperId });
   const { tags, tree, papers, setTags, readingMode, setReadingMode } = useStore();
   // 工單 14 §3.3：選段與跳回原文是跨面板的動作（FullTextView ↔ ChatPanel），
   // 中間只借 store 這兩顆訊號，兩個元件都不用知道對方存在。
@@ -525,7 +527,10 @@ export default function PaperDetail({ paperId, onBack }) {
             paperId={paperId}
             paper={paper}
             onMessagesUpdated={handleMessagesUpdated}
-            onSaveInsight={() => setShowInsightForm(true)}
+            onSaveInsight={(msg) => {
+              setInsightSeed({ source_paper_id: paperId, source_message_id: msg?.id || '' });
+              setShowInsightForm(true);
+            }}
           />
         </div>
       </div>
@@ -551,7 +556,7 @@ export default function PaperDetail({ paperId, onBack }) {
       {/* Insight form modal */}
       {showInsightForm && (
         <InsightForm
-          insight={{ source_paper_id: paperId }}
+          insight={insightSeed}
           papers={papers.length > 0 ? papers : [paper]}
           onSave={async (data) => {
             await insightsApi.create(data);

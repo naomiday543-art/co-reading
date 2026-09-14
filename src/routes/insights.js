@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid';
 import db from '../db.js';
 import { log } from '../logger.js';
 import { findRelatedInsights } from '../search.js';
+import { resolveSourceMessageId, backfillInsightSources } from '../insightSource.js';
 
 const router = Router();
 
@@ -70,6 +71,11 @@ router.get('/insights/related', (req, res) => {
   res.json(result);
 });
 
+// POST /api/insights/backfill-sources —— 存量洞察補來源訊息（工單 18 §2 A1，冪等）
+router.post('/insights/backfill-sources', (req, res) => {
+  res.json(backfillInsightSources());
+});
+
 // GET /api/insights/:id
 router.get('/insights/:id', (req, res) => {
   const insight = db.prepare('SELECT * FROM insights WHERE id = ?').get(req.params.id);
@@ -85,7 +91,7 @@ router.get('/insights/:id', (req, res) => {
 
 // POST /api/insights
 router.post('/insights', (req, res) => {
-  const { dimension, title, content, source_paper_id, source_context, tags } = req.body;
+  const { dimension, title, content, source_paper_id, source_context, source_message_id, tags } = req.body;
 
   if (!title || !title.trim()) {
     return res.status(400).json({ error: '標題不能為空' });
@@ -97,11 +103,13 @@ router.post('/insights', (req, res) => {
   const id = nanoid();
   const dim = DIMENSIONS.includes(dimension) ? dimension : '延伸';
   const tagsJson = JSON.stringify(Array.isArray(tags) ? tags : []);
+  // 驗不過就存空——洞察本身永遠存得成（工單 18 §2 A1：不 400）。
+  const sourceMessageId = resolveSourceMessageId(source_message_id, source_paper_id || null);
 
-  db.prepare(`INSERT INTO insights (id, dimension, title, content, source_paper_id, source_context, tags_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+  db.prepare(`INSERT INTO insights (id, dimension, title, content, source_paper_id, source_context, source_message_id, tags_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
     id, dim, title.trim(), content.trim(),
-    source_paper_id || null, source_context || '', tagsJson
+    source_paper_id || null, source_context || '', sourceMessageId, tagsJson
   );
 
   log('INFO', `洞察已創建: ${id} [${dim}] ${title.trim().slice(0, 40)}`);
@@ -110,6 +118,7 @@ router.post('/insights', (req, res) => {
   res.json({
     ...insight,
     tags_json: JSON.parse(insight.tags_json || '[]'),
+    source_message_id: insight.source_message_id || '',
   });
 });
 
@@ -118,7 +127,7 @@ router.patch('/insights/:id', (req, res) => {
   const insight = db.prepare('SELECT * FROM insights WHERE id = ?').get(req.params.id);
   if (!insight) return res.status(404).json({ error: '洞察不存在' });
 
-  const { dimension, title, content, source_paper_id, source_context, tags } = req.body;
+  const { dimension, title, content, source_paper_id, source_context, source_message_id, tags } = req.body;
 
   if (dimension !== undefined && !DIMENSIONS.includes(dimension)) {
     return res.status(400).json({ error: `無效的維度: ${dimension}` });
@@ -132,6 +141,13 @@ router.patch('/insights/:id', (req, res) => {
   if (content !== undefined) { updates.push('content = ?'); params.push(content.trim()); }
   if (source_paper_id !== undefined) { updates.push('source_paper_id = ?'); params.push(source_paper_id || null); }
   if (source_context !== undefined) { updates.push('source_context = ?'); params.push(source_context); }
+  if (source_message_id !== undefined) {
+    const paperId = source_paper_id !== undefined
+      ? (source_paper_id || null)
+      : insight.source_paper_id;
+    updates.push('source_message_id = ?');
+    params.push(resolveSourceMessageId(source_message_id, paperId));
+  }
   if (tags !== undefined) { updates.push('tags_json = ?'); params.push(JSON.stringify(tags)); }
 
   if (updates.length > 0) {
@@ -144,6 +160,7 @@ router.patch('/insights/:id', (req, res) => {
   res.json({
     ...updated,
     tags_json: JSON.parse(updated.tags_json || '[]'),
+    source_message_id: updated.source_message_id || '',
   });
 });
 

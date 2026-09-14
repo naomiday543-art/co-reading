@@ -211,6 +211,15 @@ if (!columnExists('insights', 'synced_at')) {
 db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_insights_external_ombre
   ON insights(external_ombre_id) WHERE external_ombre_id IS NOT NULL`);
 
+// ── Idempotent migration: insights.source_message_id（工單 18 §2 A1）──
+// 「這條洞察是從哪一則回覆長出來的」。空字串＝沒記錄（存量洞察、對比線的共振、
+// 提取時關鍵詞回找撲空）。**不是外鍵**：訊息可能因為編輯／重生被截掉，
+// 洞察是長期資產不該跟著消失；讀的時候查不到就退回 source_context 顯示。
+// ALTER ADD COLUMN 帶 DEFAULT ''⇒ 存量列自動補 ''，不需要回填 UPDATE。
+if (!columnExists('insights', 'source_message_id')) {
+  db.exec(`ALTER TABLE insights ADD COLUMN source_message_id TEXT DEFAULT ''`);
+}
+
 // ── Idempotent migration: tree_nodes.description（工單 07 §3.1）──
 // 研究方向 = parent_id IS NULL 的節點；description 是她寫給 AI 看的一段話
 // （這個方向在做什麼、關心什麼問題），注入討論與提取 prompt。
