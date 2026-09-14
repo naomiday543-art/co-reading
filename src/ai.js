@@ -968,10 +968,19 @@ function elapsedSeconds(startedAt, endedAt) {
   return (((endedAt ?? Date.now()) - startedAt) / 1000).toFixed(1);
 }
 
+/**
+ * 討論用的論文全文上限。超過這裡就截斷並附「[全文已截斷]」。
+ *
+ * 從 `buildPaperBlock` 裡提出來變成常數，是為了讓 `GET /api/papers/:id` 能用**同一個**
+ * 數字回報 `full_text_truncated`（工單 12 §3.5）——UI 上那句「AI 只讀前 100,000 字」
+ * 與實際截斷點必須是同一件事，不能各寫一個 100000 各自漂移。截斷邏輯本身沒動。
+ */
+export const PAPER_FULLTEXT_LIMIT = 100_000;
+
 // 論文區塊：標題/作者/年份/AI 摘要/全文。措辭逐字沿用工單 05 之前的 stableSystem，只是拿掉了身份句。
 export function buildPaperBlock(paper) {
-  const fullText = paper.full_text.length > 100000
-    ? paper.full_text.slice(0, 100000) + '\n[全文已截斷]'
+  const fullText = paper.full_text.length > PAPER_FULLTEXT_LIMIT
+    ? paper.full_text.slice(0, PAPER_FULLTEXT_LIMIT) + '\n[全文已截斷]'
     : paper.full_text;
 
   return `以下是這篇論文的信息：
