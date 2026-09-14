@@ -1,9 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { settingsApi, logsApi, treeApi } from '../api';
-import { useStore, getProviderDefaults } from '../store';
+import {
+  useStore, getProviderDefaults,
+  buildSettingsPayload, inferAdvancedEnabled, publicSettingsSummary,
+} from '../store';
 
 export default function Settings() {
-  const { provider, setProvider, advancedOpen, toggleAdvanced } = useStore();
+  const {
+    provider, setProvider,
+    advancedOpen, toggleAdvanced,
+    advancedEnabled, setAdvancedEnabled,
+  } = useStore();
 
   const [apiKey, setApiKey] = useState('');
   const [status, setStatus] = useState(null); // { ok, message }
@@ -116,6 +123,10 @@ export default function Settings() {
       if (cfg.configured && !apiKey) {
         setStatus({ ok: true, message: '已配置' });
       }
+      // 後端才是「有沒有開進階」的事實源（工單 17 §2.2）。沒有 advanced_enabled 這個鍵
+      // （升級前存的資料）就看通讀線與討論線是不是本來就設得不一樣 ⇒ 推定為開，
+      // 免得她既有的分開設定在第一次儲存時被 preset 蓋掉。
+      setAdvancedEnabled(inferAdvancedEnabled(cfg));
     } catch {
       // Backend may not be running yet
     }
@@ -135,36 +146,32 @@ export default function Settings() {
     setAnalyzeVisionMode(defaults.vision_mode || 'auto');
   };
 
-  const saveSettings = async () => {
-    const defaults = getProviderDefaults(provider);
-    const baseUrl = advancedOpen ? chatBaseUrl : defaults.base_url;
-    const format = advancedOpen ? chatFormat : defaults.format;
-    const model = advancedOpen ? chatModel : defaults.model;
+  // 進階區塊的九個欄位，組 payload 與存 localStorage 共用同一份。
+  const advancedValues = {
+    chatFormat, chatBaseUrl, chatModel,
+    analyzeFormat, analyzeBaseUrl, analyzeApiKey, analyzeModel,
+    analyzeVisionModel, analyzeVisionMode,
+  };
 
-    // Save to localStorage for quick reload
-    const settings = {
-      provider,
-      apiKey,
-      advanced: { chatFormat, chatBaseUrl, chatModel, analyzeFormat, analyzeBaseUrl, analyzeApiKey, analyzeModel, analyzeVisionModel, analyzeVisionMode },
-    };
-    localStorage.setItem('co-reading-settings', JSON.stringify(settings));
+  // 摺疊狀態（advancedOpen）跟這件事一點關係都沒有——看的是 advancedEnabled（工單 17 §2.2）。
+  const saveSettings = async () => {
+    localStorage.setItem('co-reading-settings', JSON.stringify({
+      provider, apiKey, advanced: advancedValues,
+    }));
 
     // Save to backend SQLite settings table
     try {
-      await settingsApi.save({
-        ai_api_key: apiKey,
-        ai_base_url: baseUrl,
-        ai_model: model,
-        ai_format: format,
-        analyze_api_key: advancedOpen && analyzeApiKey ? analyzeApiKey : apiKey,
-        analyze_base_url: advancedOpen && analyzeBaseUrl ? analyzeBaseUrl : baseUrl,
-        analyze_model: advancedOpen && analyzeModel ? analyzeModel : (defaults.analyze_model || model),
-        analyze_format: advancedOpen ? analyzeFormat : format,
-        analyze_vision_model: advancedOpen && analyzeVisionModel ? analyzeVisionModel : (defaults.vision_model || ''),
-        analyze_vision_mode: advancedOpen ? analyzeVisionMode : (defaults.vision_mode || 'auto'),
-      });
+      await settingsApi.save(buildSettingsPayload({
+        provider, apiKey, advancedEnabled, advanced: advancedValues,
+      }));
+      // 回讀一次印出來（不含任何 key／token），她下次要核對「到底存成什麼」有得看。
+      try {
+        console.info('[settings] saved', publicSettingsSummary(await settingsApi.get()));
+      } catch {}
     } catch (err) {
       console.error('Failed to save settings to backend:', err);
+      setStatus({ ok: false, message: `儲存失敗：${err.message}` });
+      return;
     }
 
     setStatus({ ok: true, message: '設定已儲存' });
@@ -174,9 +181,9 @@ export default function Settings() {
     setTesting(true);
     setStatus(null);
 
-    const baseUrl = advancedOpen ? chatBaseUrl : getProviderDefaults(provider).base_url;
-    const format = advancedOpen ? chatFormat : getProviderDefaults(provider).format;
-    const model = advancedOpen ? chatModel : getProviderDefaults(provider).model;
+    const baseUrl = advancedEnabled ? chatBaseUrl : getProviderDefaults(provider).base_url;
+    const format = advancedEnabled ? chatFormat : getProviderDefaults(provider).format;
+    const model = advancedEnabled ? chatModel : getProviderDefaults(provider).model;
 
     try {
       const result = await settingsApi.test({
@@ -348,15 +355,47 @@ export default function Settings() {
 
         {/* Advanced settings */}
         <div className="card p-6">
-          <button
-            className="text-sm text-text hover:text-text-strong font-medium"
-            onClick={toggleAdvanced}
-          >
-            {advancedOpen ? '▾' : '▸'} 進階設定（使用其他 AI 服務）
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              className="text-sm text-text hover:text-text-strong font-medium"
+              onClick={toggleAdvanced}
+            >
+              {advancedOpen ? '▾' : '▸'} 進階設定（使用其他 AI 服務）
+            </button>
+            {/* 摺疊起來時也看得出它是開著的——否則「我到底有沒有在用進階」只能用猜的 */}
+            <span className={`text-[11px] px-1.5 py-0.5 rounded-full border ${
+              advancedEnabled
+                ? 'text-fact border-fact/40'
+                : 'text-faint border-border-soft'
+            }`}>
+              {advancedEnabled ? '已啟用' : '未啟用'}
+            </span>
+          </div>
 
           {advancedOpen && (
             <div className="mt-3 space-y-4 pl-4 border-l-2 border-border-soft">
+              {/* 使用進階設定的開關（工單 17 §2.2）——摺疊狀態不再決定存什麼 */}
+              <div className="bg-surface-alt rounded-[10px] p-3">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 accent-[var(--accent)]"
+                    checked={advancedEnabled}
+                    onChange={e => setAdvancedEnabled(e.target.checked)}
+                  />
+                  <span>
+                    <span className="text-[13.5px] text-text-strong font-medium">
+                      使用進階設定（通讀線與討論線分開設定）
+                    </span>
+                    <span className="block text-[11.5px] text-muted mt-0.5">
+                      開啟：儲存時寫下面這些欄位的值。
+                      關閉：儲存時通讀線與討論線都回到「{providerInfo[provider]?.label || provider}」的預設值
+                      （包含圖表／識圖），下面填的東西不會被寫入。
+                    </span>
+                  </span>
+                </label>
+              </div>
+
               {/* Chat model */}
               <div>
                 <h4 className="text-sm font-medium text-text-strong mb-2">討論用模型</h4>
@@ -461,6 +500,22 @@ export default function Settings() {
                     />
                   </div>
                 </div>
+              </div>
+
+              {/* 進階區塊自己的儲存鈕（工單 17 §2.2）——上面那顆離這裡太遠，
+                  她在這裡改完自然會找這裡的按鈕。兩顆走的是同一個 saveSettings。 */}
+              <div className="flex items-center gap-3 pt-1">
+                <button
+                  className="px-4 py-2 bg-accent text-accent-fg rounded-[10px] text-sm font-medium hover:bg-accent-hover shadow-sm"
+                  onClick={saveSettings}
+                >
+                  儲存進階設定
+                </button>
+                {status && (
+                  <span className={`text-sm ${status.ok ? 'text-fact' : 'text-danger'}`}>
+                    {status.ok ? '✓ ' : '✕ '}{status.message}
+                  </span>
+                )}
               </div>
             </div>
           )}

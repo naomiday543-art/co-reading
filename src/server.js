@@ -47,6 +47,9 @@ app.put('/api/settings', (req, res) => {
     'ai_api_key', 'ai_base_url', 'ai_model', 'ai_format',
     'analyze_api_key', 'analyze_base_url', 'analyze_model', 'analyze_format',
     'analyze_vision_mode', 'analyze_vision_model',
+    // 「使用進階設定」的意圖（工單 17 §2.2）。存後端而不是只存 localStorage：
+    // 換瀏覽器／換機器時才不會把她分開設好的通讀線當成「沒開過進階」洗回 preset。
+    'advanced_enabled',
     'gateway_url', 'gateway_token', // 洞察出海到 research-gateway（契約 §二 M3.b）
   ];
   for (const key of fields) {
