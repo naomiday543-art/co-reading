@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { nanoid } from 'nanoid';
 import db from '../db.js';
-import { chatAboutPaper, ChatAbortedError } from '../ai.js';
+import { chatAboutPaper, ChatAbortedError, analyzeErrorKind } from '../ai.js';
 import { parseQuote, validateQuote, renderQuotedMessage } from '../quote.js';
 import { log } from '../logger.js';
 
@@ -9,6 +9,23 @@ const router = Router();
 
 /** `thinking` 事件的節流間隔。推理鏈是逐 chunk 來的，不節流會變成每秒幾十發 SSE。 */
 const THINKING_THROTTLE_MS = 500;
+
+/**
+ * 空正文（`kind=output`）那一型要給的「你現在能做什麼」（工單 17 §2.1）。
+ * 訊息本身已經說了病因（思考吃光預算／模型回空），hint 說的是下一步。
+ */
+const BUDGET_HINT = '調高 .env 的 CHAT_MAX_TOKENS 或改用非推理模型後，按「重新生成」會用新的預算再試';
+
+/**
+ * 這次失敗要附哪一句提示。
+ *
+ * `baseHint` 只有「這一輪剛寫了 user 訊息」的入口才會傳（＝孤兒尾巴救援）；
+ * 重新生成／繼續沒有新寫的 user 訊息，就不能跟她說「你的問題已保存」。
+ */
+function chatErrorHint(err, baseHint) {
+  if (analyzeErrorKind(err) !== 'output') return baseHint || '';
+  return baseHint ? `你的問題已保存——${BUDGET_HINT}` : BUDGET_HINT;
+}
 
 function sse(res, payload) {
   if (res.writableEnded || res.destroyed) return;
@@ -74,6 +91,20 @@ async function runChatStream(res, { paper, history, userMessage, hint, quote = n
       },
     });
 
+    // 守門的最後一道（工單 17 §2.1）：`ok:true` 就等於「等一下要寫 DB」，所以 0 字的
+    // 回答絕不能從這裡出去。`chatAboutPaper` 已經先擋一層（丟 ChatEmptyOutputError），
+    // 這顆是給未來任何新路徑用的護欄——舊版就是少了它，才把空氣泡寫進 messages。
+    if (fullContent.trim() === '') {
+      log('ERROR', `${label}失敗: ${paper.id} — 模型回了空正文，未寫入 DB`);
+      sse(res, {
+        type: 'error',
+        message: '模型回了空正文，這一輪沒有保存',
+        partial: 0,
+        hint: hint ? `你的問題已保存——${BUDGET_HINT}` : BUDGET_HINT,
+      });
+      return { ok: false, content: '', aborted: false };
+    }
+
     return { ok: true, content: fullContent, aborted: false };
   } catch (err) {
     if (err instanceof ChatAbortedError || controller.signal.aborted) {
@@ -81,11 +112,14 @@ async function runChatStream(res, { paper, history, userMessage, hint, quote = n
       return { ok: false, content: fullContent, aborted: true };
     }
     log('ERROR', `${label}失敗: ${paper.id} — ${err.message}`);
+    // 空正文那一型 partial 一定是 0（只有空白字元也算空），前端才不會去「保住半截」。
+    const partial = fullContent.trim() === '' ? 0 : fullContent.length;
+    const finalHint = chatErrorHint(err, hint);
     sse(res, {
       type: 'error',
       message: err.message,
-      partial: fullContent.length,
-      ...(hint ? { hint } : {}),
+      partial,
+      ...(finalHint ? { hint: finalHint } : {}),
     });
     return { ok: false, content: fullContent, aborted: false };
   } finally {
