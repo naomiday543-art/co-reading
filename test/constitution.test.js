@@ -79,7 +79,19 @@ describe('loadConstitution', () => {
     assert.ok(text.includes('4. **引用要具體。**'));
     assert.ok(text.includes('5. **講清楚，不講深奧。**'));
     assert.ok(text.includes('6. **不評分、不催促、不製造焦慮。**'));
-    assert.ok(!text.includes('8. **'), '本工單只加第 7 條');
+  });
+
+  // 工單 13 §3.3：抽字品質提示點名的頁，導師要說「我讀不到」，不要用常識補一個答案。
+  // 工單 07 那條 `!text.includes('8. **')`（「本工單只加第 7 條」）由這顆接手：
+  // 第 8 條是本工單加的，第 9 條仍然不該存在。憲章只加不改（工單 13 §4 紅線）。
+  it('K2 內建憲章含第 8 條：讀不到就說讀不到', () => {
+    const { text, source } = loadConstitution({ dataDir: mkdtempSync(join(tmpdir(), 'cr-const-')) });
+    assert.equal(source, 'builtin');
+
+    assert.ok(text.includes('8. **讀不到就說讀不到。**'), '第 8 條不在內建憲章裡');
+    assert.ok(text.includes('抽字品質提示點名的頁'), '要接得上 buildQualityNote 那段小註的用語');
+    assert.ok(text.includes('不要用常識補一個答案'));
+    assert.ok(!text.includes('9. **'), '本工單只加第 8 條');
   });
 });
 
