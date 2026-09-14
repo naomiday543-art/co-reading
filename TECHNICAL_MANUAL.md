@@ -135,7 +135,7 @@ co-reading/
 | `tree_node_id` | FK → tree_nodes | 所在知識樹節點，可為 NULL |
 | `analyze_status` | TEXT | `pending` / `analyzing` / `done` / `error` |
 | `analyze_error` | TEXT | 失敗訊息 |
-| `text_meta` | TEXT | 抽字後設資料 JSON（工單 13）：`{version, references:{start,end,chars,cut,reason,heading,density}, pages:[{n,chars,lines,single_char_line_ratio,nonword_ratio,avg_line_len,rotated_hint,quality,reasons}], bad_pages:[n]}`。**推導資料**，空字串＝還沒算；隨時可 `POST /api/papers/:id/text-meta/rebuild` 重算 |
+| `text_meta` | TEXT | 抽字後設資料 JSON（工單 13／16）：`{version, references:{cut, blocks:[{start,end,chars,heading,density,reason}], chars_total, start, end, chars, reason, heading, density}, pages:[{n,chars,lines,single_char_line_ratio,nonword_ratio,avg_line_len,rotated_hint,quality,reasons}], bad_pages:[n]}`。`references.start/end/chars` ＝**最大那一塊**（向後相容），合計看 `chars_total`。**推導資料**，空字串＝還沒算；`version < TEXT_META_VERSION`（現為 2）時 `GET /api/papers/:id` 會自動重算參考文獻那半（頁級品質沿用舊值）；隨時可 `POST /api/papers/:id/text-meta/rebuild` 全部重算 |
 | `created_at`, `updated_at` | INT | ms timestamp |
 
 ### 5.2 `messages` — 討論訊息
@@ -225,7 +225,8 @@ CREATE VIRTUAL TABLE insights_fts USING fts5(
   - `userMessage = null` 表示「不附加 user 消息」，用於 regenerate / continue
 - `testConnection(config)` — Settings 頁面試 API 連通性
 - 全文進 prompt 的那條路（工單 13）：`prepareFullTextForModel(fullText, textMeta)`
-  ＝ `stripReferences`（切參考文獻區塊，換成一行 `[參考文獻 N 字已略去]`）
+  ＝ `stripReferences`（切參考文獻區塊——工單 16 起可能不只一塊，每塊各換成一行
+  `[參考文獻 N 字已略去]`；由後往前切，前面幾塊的偏移才不會被動到）
   → `clipFullText`（超過 `resolvePaperFulltextLimit()` 就截斷並附 `[全文已截斷]`）。
   **順序不能反**，先切才省得下截斷。通讀與討論共用；`papers.full_text` 原文永遠不動。
   `buildQualityNote(textMeta)` 產出壞頁那句小註（沒壞頁時回空字串 ⇒ 穩定前綴不變）
@@ -266,18 +267,27 @@ CREATE VIRTUAL TABLE insights_fts USING fts5(
 - 文本長度 < 100 字視為掃描版，throw `SCANNED_PDF` error code
 - 上層 `papers.js` 捕獲後將論文標記為 error
 - `extractPDFDetailed(path)` → `{ text, pageMeta }`：全文 ＋ 頁級抽字品質，一次解析拿到
-- `locateReferencesBlock(fullText)`（工單 13 §3.2）：找參考文獻區塊的 `[start, end)`。
-  起點＝位置 ≥50% 的**最後一個**獨立行標題（References / Bibliography / 參考文獻…）；
+- `locateReferencesBlock(fullText)`（工單 13 §3.2、工單 16）：找參考文獻區塊，回 `blocks[]`。
+  候選＝位置 **≥35%** 的獨立行標題（References / Bibliography / 參考文獻…），由後往前掃**全部**；
   終點＝下一個「整行就是章節標題」的行（STAR METHODS / Methods / Supplementary /
   Appendix / Acknowledgements / Author contributions / Key Resources Table / 致谢…），
   沒有就到文末，再按引用密度從尾端回退（防止把夾在中間的圖注一起切掉）。
   區塊要過「每千字 ≥6 個引用特徵」才算數，否則 `reason='low_density'` 不切。
-  **只回位置，不動原文**；切除在 `ai.js` 的 `stripReferences` 上發生。
+  位置在 **[35%, 50%)** 的候選要再多過兩道閂（工單 16 §3.1）：終點必須是明確的章節標題
+  （不是文末、也不是尾端回退出來的點，否則 `reason='early_open_end'`）、且區塊 ≥2,000 字
+  （否則 `early_too_short`）——擋的是「正文中間一行 References」把正文整段挖掉。
+  通過的候選全部收進 `blocks[]`（依 start 排序、不重疊；重疊時保留較早開始的那個），
+  `start/end/chars` 是**最大那一塊**（向後相容），`chars_total` 是合計。
+  Nature 版式（主文獻表在 40.6%、Methods 之前）就是靠這條放寬吃到的。
+  **只回位置，不動原文**；切除在 `ai.js` 的 `stripReferences` 上發生（每塊各放一行標記）。
 - `describePages(pages)`（工單 13 §3.3）：每頁算 chars / lines / 單字元行比例 /
   非文字符號比例 / 平均行長 / 旋轉指紋（多數 text item 的 `transform[0]≈0 且 [1]≠0`，
   或整頁 `/Rotate 90`），判成 `ok | poor | rotated`
 - `buildTextMeta(fullText, pageMeta)` → 存進 `papers.text_meta` 的那顆 JSON；
   `parseTextMeta(raw)` 反向解析（壞掉回 `null`，呼叫端自己決定要不要重算）
+- `TEXT_META_VERSION`（現為 2）＝**自動重算的觸發器**：偵測規則一改就 +1，
+  舊論文在 `GET /api/papers/:id` 時由 `ensureTextMeta` 重算參考文獻那半並回寫
+  （頁級品質沿用舊值、不重解析 PDF）。1→2 是工單 16（門檻 35%、多區塊）
 
 ### 6.6 `logger.js`
 - 寫檔案 + ring buffer（記憶體保留最近 N 條）
@@ -295,7 +305,7 @@ CREATE VIRTUAL TABLE insights_fts USING fts5(
 |--------|------|------|
 | POST | `/api/papers/upload` | multipart，欄位名 `files`，可選 `tree_node_id`；上傳後非同步觸發通讀 |
 | GET | `/api/papers` | 列表，支援 `?status`, `?tag`, `?tree_node_id` (`__none` 為未分類), `?q`, `?sort=title\|created\|updated` |
-| GET | `/api/papers/:id` | 含 tags、tree_node、`full_text_chars` / `full_text_truncated` / `full_text_limit`（工單 12 §3.5）、`text_meta`（工單 13；沒算過會當場補算並回寫） |
+| GET | `/api/papers/:id` | 含 tags、tree_node、`full_text_chars` / `full_text_truncated` / `full_text_limit`（工單 12 §3.5）、`text_meta`（工單 13／16；沒算過、或版本落後於 `TEXT_META_VERSION` 會當場重算並回寫） |
 | PATCH | `/api/papers/:id` | 部分更新（白名單：title, authors, year, doi, status, notes, tree_node_id） |
 | DELETE | `/api/papers/:id` | 連帶刪除 PDF 檔案，message / annotation / section_progress 透過 FK CASCADE 一併刪 |
 | GET | `/api/papers/:id/pdf` | 串流原始 PDF |

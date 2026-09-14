@@ -241,7 +241,8 @@ POST   /api/papers/:id/analyze
     3. 存入 summary_* 欄位，設 analyze_status = 'done'
     4. 嘗試從摘要中提取標題/作者/年份，回填空欄位
   如果 full_text 超過 PAPER_FULLTEXT_LIMIT_CHARS（預設 250000 字符），截斷到上限（附截斷提示）；
-  送出前先切掉參考文獻區塊（CUT_REFERENCES，預設開；papers.full_text 原文不動）
+  送出前先切掉參考文獻區塊（CUT_REFERENCES，預設開；papers.full_text 原文不動；
+  一篇可能有不只一塊，例如 Nature 版式的主文獻表＋Methods 補充文獻表）
   出錯: 設 analyze_status = 'error'，analyze_error = 錯誤信息
   返回: { ok: true, analyze_status }
   （不阻塞，立即返回，後台處理。前端輪詢 GET /api/papers/:id 檢查狀態）

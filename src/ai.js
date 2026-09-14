@@ -1064,39 +1064,64 @@ export function resolveCutReferences() {
 }
 
 /**
- * 送模型前把參考文獻區塊換成一行「[參考文獻 N 字已略去]」。
+ * 存下來的 `text_meta.references` → 區塊清單（工單 16 §3.2 起可能不只一塊）。
+ * 工單 16 之前存的是單塊（沒有 `blocks`），照舊當成一塊用。
+ */
+function recordedReferenceBlocks(textMeta) {
+  const recorded = parseTextMeta(textMeta)?.references;
+  if (!recorded?.cut) return null;
+  if (Array.isArray(recorded.blocks) && recorded.blocks.length > 0) return recorded.blocks;
+  return [{ start: recorded.start, end: recorded.end, heading: recorded.heading }];
+}
+
+/**
+ * 存下來的偏移還能不能用：必須遞增、不重疊、在文字範圍內，而且**那個位置真的是那個標題**。
+ * 全文被重新抽取過的話舊偏移會是錯的，錯的偏移會從正文中間挖掉一塊，比不切嚴重得多。
+ */
+function referenceBlocksUsable(blocks, text) {
+  if (!Array.isArray(blocks) || blocks.length === 0) return false;
+  let prevEnd = 0;
+  for (const block of blocks) {
+    if (!Number.isInteger(block?.start) || !Number.isInteger(block?.end)) return false;
+    if (block.start < prevEnd || block.end <= block.start || block.end > text.length) return false;
+    if (block.heading
+      && text.slice(block.start, block.start + block.heading.length).toLowerCase()
+        !== `${block.heading}`.toLowerCase()) return false;
+    prevEnd = block.end;
+  }
+  return true;
+}
+
+/**
+ * 送模型前把每個參考文獻區塊換成一行「[參考文獻 N 字已略去]」。
  *
  * **只動送出去的那份文字**：`papers.full_text` 原文一個字不改（閱讀模式看到的、
  * 工單 14 的選段偏移算的，都是原文）。位置優先用上傳時算好的 `text_meta`，
- * 但一定要先驗「那個位置真的是那個標題」——全文被重新抽取過的話舊偏移會是錯的，
- * 錯的偏移會從正文中間挖掉一塊，比不切嚴重得多。驗不過就當場重算。
+ * 驗不過就當場重算。
  *
- * @returns {{text: string, cut: boolean, chars: number, reason: string}}
+ * @returns {{text: string, cut: boolean, chars: number, blocks: number, reason: string}}
  */
 export function stripReferences(fullText, textMeta) {
   const text = `${fullText ?? ''}`;
-  if (!resolveCutReferences()) return { text, cut: false, chars: 0, reason: 'disabled' };
+  if (!resolveCutReferences()) return { text, cut: false, chars: 0, blocks: 0, reason: 'disabled' };
 
-  const meta = parseTextMeta(textMeta);
-  const recorded = meta?.references;
-  const usable = recorded?.cut
-    && Number.isInteger(recorded.start) && Number.isInteger(recorded.end)
-    && recorded.start >= 0 && recorded.end > recorded.start && recorded.end <= text.length
-    && (!recorded.heading
-      || text.slice(recorded.start, recorded.start + recorded.heading.length).toLowerCase()
-        === `${recorded.heading}`.toLowerCase());
+  const recorded = recordedReferenceBlocks(textMeta);
+  let blocks = referenceBlocksUsable(recorded, text) ? recorded : null;
+  if (!blocks) {
+    const located = locateReferencesBlock(text);
+    if (!located.cut) return { text, cut: false, chars: 0, blocks: 0, reason: located.reason || 'no_heading' };
+    blocks = located.blocks;
+  }
 
-  const block = usable ? recorded : locateReferencesBlock(text);
-  if (!block.cut) return { text, cut: false, chars: 0, reason: block.reason || 'no_heading' };
-
-  const chars = block.end - block.start;
-  const marker = `[參考文獻 ${chars.toLocaleString('en-US')} 字已略去]\n`;
-  return {
-    text: text.slice(0, block.start) + marker + text.slice(block.end),
-    cut: true,
-    chars,
-    reason: 'ok',
-  };
+  // 由後往前切：先切後面的，前面那幾塊的偏移才不會被動到。
+  let out = text;
+  let chars = 0;
+  for (let i = blocks.length - 1; i >= 0; i -= 1) {
+    const size = blocks[i].end - blocks[i].start;
+    chars += size;
+    out = `${out.slice(0, blocks[i].start)}[參考文獻 ${size.toLocaleString('en-US')} 字已略去]\n${out.slice(blocks[i].end)}`;
+  }
+  return { text: out, cut: true, chars, blocks: blocks.length, reason: 'ok' };
 }
 
 /**
@@ -1109,6 +1134,7 @@ export function prepareFullTextForModel(fullText, textMeta) {
     text: clipFullText(stripped.text, limit),
     refsCut: stripped.cut,
     refsChars: stripped.chars,
+    refsBlocks: stripped.blocks,
     refsReason: stripped.reason,
     truncated: stripped.text.length > limit,
   };
