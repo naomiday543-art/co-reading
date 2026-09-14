@@ -4,7 +4,7 @@ import { nanoid } from 'nanoid';
 import { join } from 'path';
 import { unlinkSync, existsSync } from 'fs';
 import db from '../db.js';
-import { extractPDF, buildTextMeta, parseTextMeta } from '../pdf.js';
+import { extractPDFDetailed, inspectPDF, describePages, buildTextMeta, parseTextMeta } from '../pdf.js';
 import { analyzePaper, resolvePaperFulltextLimit } from '../ai.js';
 import { log } from '../logger.js';
 import { extractInsights } from '../memory.js';
@@ -34,9 +34,12 @@ router.post('/upload', upload.array('files'), async (req, res) => {
       const id = nanoid();
       const pdfPath = file.path;
       let fullText = '';
+      let pageMeta = [];
 
       try {
-        fullText = await extractPDF(pdfPath);
+        // 頁級抽字品質只有在抽字當下拿得到（item transform／頁面旋轉角），
+        // 所以跟全文一起取，不另外再解析一次 PDF（那要 300–400ms）。
+        ({ text: fullText, pageMeta } = await extractPDFDetailed(pdfPath));
       } catch (err) {
         if (err.code === 'SCANNED_PDF') {
           fullText = '';
@@ -50,7 +53,7 @@ router.post('/upload', upload.array('files'), async (req, res) => {
 
       log('INFO', `PDF 上傳成功: ${id} (${file.originalname}, ${(file.size / 1024 / 1024).toFixed(1)}MB)`);
 
-      if (fullText) saveTextMeta(id, fullText);
+      if (fullText) saveTextMeta(id, fullText, pageMeta);
 
       results.push({ id, title: file.originalname, status: 'unread', analyze_status: 'pending', scanned: !fullText });
 
@@ -348,7 +351,18 @@ router.post('/:id/text-meta/rebuild', async (req, res) => {
   if (!paper) return res.status(404).json({ error: '論文不存在' });
   if (!paper.full_text) return res.status(400).json({ error: '此論文沒有提取到文本' });
 
-  const meta = saveTextMeta(paper.id, paper.full_text);
+  let pageMeta = [];
+  const pdfPath = paper.pdf_filename ? join(dataPaths.pdfDir, paper.pdf_filename) : null;
+  if (pdfPath && existsSync(pdfPath)) {
+    try {
+      pageMeta = describePages((await inspectPDF(pdfPath)).pages);
+    } catch (err) {
+      // PDF 不見了／解析失敗不該擋住參考文獻那半——少的是頁級品質，不是全部。
+      log('WARN', `[TEXTMETA] paper=${paper.id} 重新解析 PDF 失敗，只重算參考文獻: ${err.message}`);
+    }
+  }
+
+  const meta = saveTextMeta(paper.id, paper.full_text, pageMeta);
   if (!meta) return res.status(500).json({ error: 'text_meta 重算失敗' });
   res.json({ ok: true, text_meta: meta });
 });

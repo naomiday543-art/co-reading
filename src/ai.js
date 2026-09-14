@@ -876,7 +876,11 @@ export function extractAnalyzeJson(config, data) {
 }
 
 async function buildAnalyzeUserContent(config, fullText, pdfPath, textMeta) {
-  const { text } = prepareFullTextForModel(fullText, textMeta);
+  const prepared = prepareFullTextForModel(fullText, textMeta);
+  // 壞頁提示跟著抽取文字走。下面那條 anthropic 原生讀 PDF 的路徑不加——那條路模型
+  // 看的是 PDF 本身，跟「抽字抽壞了」無關，講了反而是誤導。
+  const note = buildQualityNote(textMeta);
+  const text = note ? `${prepared.text}\n\n${note}` : prepared.text;
   if (!pdfPath || !isVisionEnabled(config)) return text;
 
   if (config.format === 'anthropic') {
@@ -1109,9 +1113,38 @@ export function prepareFullTextForModel(fullText, textMeta) {
   };
 }
 
+/** 頁碼清單 → 「第 3、7、12 頁」；太多就截斷成「第 3、7… 等 N 頁」。 */
+function renderPageList(pages, max = 12) {
+  const head = pages.slice(0, max).join('、');
+  return pages.length > max ? `第 ${head}… 等 ${pages.length} 頁` : `第 ${head} 頁`;
+}
+
+/**
+ * 抽字品質提示（工單 13 §3.3）。**只有真的有壞頁時才回非空字串**——
+ * 沒壞頁時穩定前綴逐字等於工單 13 之前，cache 不會因為這個功能白冷一次。
+ *
+ * 攔不住模型「硬答」，但可以把它答不出來的地方指名道姓講出來；配上憲章第 8 條
+ *（讀不到就說讀不到），她至少知道哪一段答案是空氣。
+ */
+export function buildQualityNote(textMeta) {
+  const meta = parseTextMeta(textMeta);
+  const pages = Array.isArray(meta?.pages) ? meta.pages : [];
+  const rotated = pages.filter(p => p.quality === 'rotated').map(p => p.n);
+  const poor = pages.filter(p => p.quality === 'poor').map(p => p.n);
+  if (rotated.length === 0 && poor.length === 0) return '';
+
+  const parts = [];
+  if (rotated.length > 0) parts.push(`${renderPageList(rotated)}文字疑似旋轉（可能是橫向表格）`);
+  if (poor.length > 0) parts.push(`${renderPageList(poor)}抽字不完整`);
+
+  return `抽字品質提示：${parts.join('、')}。這些頁的內容你可能讀不到或讀到亂碼；`
+    + '涉及時明說「這部分我從抽取文字裡讀不到」，不要推測。';
+}
+
 // 論文區塊：標題/作者/年份/AI 摘要/全文。措辭逐字沿用工單 05 之前的 stableSystem，只是拿掉了身份句。
 export function buildPaperBlock(paper) {
   const { text: fullText } = prepareFullTextForModel(paper.full_text, paper.text_meta);
+  const qualityNote = buildQualityNote(paper.text_meta);
 
   return `以下是這篇論文的信息：
 標題：${paper.title}
@@ -1126,7 +1159,7 @@ AI 摘要：
 - 局限：${paper.summary_limitations}
 
 以下是論文全文（供你參考回答問題，不需要重複全文內容）：
-${fullText}`;
+${fullText}${qualityNote ? `\n\n${qualityNote}` : ''}`;
 }
 
 // system 的穩定前綴 = 憲章（單獨一個 cache block，永遠最前）+ 論文區塊（第二個 cache block）。

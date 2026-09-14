@@ -8,7 +8,17 @@ import { log } from './logger.js';
 
 const execFileAsync = promisify(execFile);
 
-function pageTextRenderer(pageTexts) {
+/**
+ * pdf.js 的 text item transform 是 [a, b, c, d, e, f]。橫排文字 a≠0、b≈0；
+ * 被轉 90° 的文字 a≈0、b≠0——這就是「橫向大表」在抽字層的指紋（工單 13 §3.3）。
+ * 用 0.01 當零，浮點誤差與極小字級都吃得下。
+ */
+const ROTATE_EPS = 0.01;
+
+/** 一頁至少要有這麼多個 text item，「多數被旋轉」才算數（兩三個側邊浮水印不算）。 */
+const ROTATE_MIN_ITEMS = 5;
+
+function pageTextRenderer(pageTexts, pageStats) {
   return async (pageData) => {
     const textContent = await pageData.getTextContent({
       normalizeWhitespace: false,
@@ -16,13 +26,84 @@ function pageTextRenderer(pageTexts) {
     });
     let lastY;
     let text = '';
+    let rotatedItems = 0;
     for (const item of textContent.items) {
-      text += lastY === undefined || lastY === item.transform[5] ? item.str : `\n${item.str}`;
-      lastY = item.transform[5];
+      const t = item.transform;
+      if (Math.abs(t[0]) < ROTATE_EPS && Math.abs(t[1]) > ROTATE_EPS) rotatedItems += 1;
+      text += lastY === undefined || lastY === t[5] ? item.str : `\n${item.str}`;
+      lastY = t[5];
     }
     pageTexts.push(text);
+    pageStats.push({
+      items: textContent.items.length,
+      rotatedItems,
+      // 頁面本身的旋轉角（有些橫向頁是整頁 /Rotate 90，item transform 反而是正的）。
+      rotate: Number(pageData?.rotate) || 0,
+    });
     return text;
   };
+}
+
+/** 算得出品質但「不是字」的字元：控制碼、私有區、替換字元、罕見符號。 */
+const WORDY = /[A-Za-z0-9一-鿿぀-ヿ가-힯]/;
+const PLAIN_PUNCT = /[\s.,;:!?'"()\[\]{}<>\/\\|@#$%^&*_+=~`\-—–…·、。，；：！？（）「」『』《》【】°±×÷≤≥≈∼%‰′″]/;
+
+/**
+ * 一頁的抽字品質（工單 13 §3.3）。
+ *
+ * 為什麼要這個：她問「橫著放的大表能不能讀到」。答案是抽出來一堆碎片，而模型會
+ * 照樣硬答。攔不住模型亂猜，但可以把「這幾頁我讀不到」明說給它聽（§3.3 的品質提示
+ * ＋憲章第 8 條），剩下的交給工單 15 的視覺渲染。
+ *
+ * @param {{text?: string, items?: number, rotatedItems?: number, rotate?: number}} page
+ * @param {number} n 1-based 頁碼
+ * @param {boolean} isLast 最後一頁（末頁常常只有版權宣告，字少不算壞）
+ */
+export function describePageQuality(page, n, isLast = false) {
+  const text = `${page?.text ?? ''}`;
+  const lines = text.split('\n').filter(line => line.trim().length > 0);
+  const chars = text.replace(/\s/g, '').length;
+
+  const shortLines = lines.filter(line => line.trim().length <= 2).length;
+  const singleCharLineRatio = lines.length > 0 ? shortLines / lines.length : 0;
+
+  let nonword = 0;
+  for (const ch of text) {
+    if (WORDY.test(ch) || PLAIN_PUNCT.test(ch)) continue;
+    nonword += 1;
+  }
+  const nonwordRatio = text.length > 0 ? nonword / text.length : 0;
+  const avgLineLen = lines.length > 0
+    ? lines.reduce((sum, line) => sum + line.trim().length, 0) / lines.length
+    : 0;
+
+  const items = Number(page?.items) || 0;
+  const rotatedHint = (items >= ROTATE_MIN_ITEMS && Number(page?.rotatedItems) > items / 2)
+    || Math.abs(Number(page?.rotate) || 0) % 180 === 90;
+
+  const reasons = [];
+  if (rotatedHint) reasons.push('rotated');
+  if (chars < 200 && !isLast) reasons.push('too_short');
+  if (singleCharLineRatio > 0.4) reasons.push('fragmented');
+  if (nonwordRatio > 0.3) reasons.push('garbled');
+
+  const quality = rotatedHint ? 'rotated' : (reasons.length > 0 ? 'poor' : 'ok');
+  return {
+    n,
+    chars,
+    lines: lines.length,
+    single_char_line_ratio: Number(singleCharLineRatio.toFixed(3)),
+    nonword_ratio: Number(nonwordRatio.toFixed(3)),
+    avg_line_len: Number(avgLineLen.toFixed(1)),
+    rotated_hint: rotatedHint,
+    quality,
+    reasons,
+  };
+}
+
+/** `inspectPDF().pages` → 每頁一筆品質紀錄。 */
+export function describePages(pages = []) {
+  return pages.map((page, i) => describePageQuality(page, i + 1, i === pages.length - 1));
 }
 
 // ── 參考文獻區塊（工單 13 §3.2）──────────────────────────────────────────
@@ -228,16 +309,23 @@ export function selectVisualPageNumbers(pageTexts, maxPages = 8) {
 export async function inspectPDF(filepath) {
   const buf = readFileSync(filepath);
   const pageTexts = [];
-  const data = await pdfParse(buf, { pagerender: pageTextRenderer(pageTexts) });
+  const pageStats = [];
+  const data = await pdfParse(buf, { pagerender: pageTextRenderer(pageTexts, pageStats) });
   return {
     text: data.text || '',
     pageTexts,
+    // 逐頁的文字 ＋ 抽字當下才拿得到的東西（item 數、被旋轉的 item 數、頁面旋轉角）。
+    pages: pageTexts.map((text, i) => ({ n: i + 1, text, ...(pageStats[i] || {}) })),
     pageCount: data.numpages || pageTexts.length,
   };
 }
 
-export async function extractPDF(filepath) {
-  const { text } = await inspectPDF(filepath);
+/**
+ * 上傳路徑要的兩樣東西：全文 ＋ 頁級抽字品質。
+ * 掃描版（幾乎抽不到字）照舊丟 SCANNED_PDF，由 `papers.js` 標成 error。
+ */
+export async function extractPDFDetailed(filepath) {
+  const { text, pages } = await inspectPDF(filepath);
 
   // Check for scanned PDF (little to no extractable text)
   const clean = text.replace(/\s/g, '');
@@ -247,6 +335,11 @@ export async function extractPDF(filepath) {
     throw err;
   }
 
+  return { text, pageMeta: describePages(pages) };
+}
+
+export async function extractPDF(filepath) {
+  const { text } = await extractPDFDetailed(filepath);
   return text;
 }
 
