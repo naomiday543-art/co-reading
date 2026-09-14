@@ -25,6 +25,7 @@ import {
   buildQuoteContextBlock,
   quoteLogLabel,
 } from '../src/quote.js';
+import { useStore } from '../frontend/src/store.js';
 import {
   OFFSET_ATTR,
   MIN_SELECTION_CHARS,
@@ -620,5 +621,42 @@ describe('前端偏移映射（§5.5）', () => {
     assert.equal(paragraphIndexOfOffset(paras, P2_START), 1);
     assert.equal(paragraphIndexOfOffset(paras, FULL_TEXT.length - 1), 2);
     assert.equal(paragraphIndexOfOffset([], 3), -1);
+  });
+});
+
+// ── 前端狀態：選段 → 討論面板的那條線（§3.3）────────────────────────────
+describe('pendingQuote／quoteJump（前端狀態，不持久化）', () => {
+  test('setPendingQuote → clearPendingQuote；送出後不該還黏在輸入框上', () => {
+    const { setPendingQuote, clearPendingQuote } = useStore.getState();
+    const quote = { text: PARA_2, start: P2_START, end: P2_END };
+
+    setPendingQuote(quote);
+    assert.deepEqual(useStore.getState().pendingQuote, quote);
+
+    clearPendingQuote();
+    assert.equal(useStore.getState().pendingQuote, null);
+  });
+
+  test('requestQuoteJump 帶時間戳 ⇒ 連點同一塊引用也會再觸發一次跳轉', () => {
+    const { requestQuoteJump, clearQuoteJump } = useStore.getState();
+    requestQuoteJump({ start: 10, end: 20 });
+    const first = useStore.getState().quoteJump;
+    assert.equal(first.start, 10);
+    assert.equal(first.end, 20);
+    assert.equal(typeof first.ts, 'number');
+
+    requestQuoteJump({ start: 10, end: 20 });
+    assert.notEqual(useStore.getState().quoteJump, first, '每次都是新物件，effect 才會再跑');
+
+    clearQuoteJump();
+    assert.equal(useStore.getState().quoteJump, null);
+  });
+
+  test('預設是空的（重整就乾淨，不進 localStorage）', () => {
+    const keys = Object.keys(useStore.getState());
+    assert.ok(keys.includes('pendingQuote') && keys.includes('quoteJump'));
+    useStore.setState({ pendingQuote: null, quoteJump: null });
+    assert.equal(useStore.getState().pendingQuote, null);
+    assert.equal(useStore.getState().quoteJump, null);
   });
 });
