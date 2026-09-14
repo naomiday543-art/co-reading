@@ -16,7 +16,7 @@ process.env.CO_READING_DB_PATH = `/tmp/co-reading-fulltext-quality-${process.pid
 import db from '../src/db.js';
 import {
   locateReferencesBlock, buildTextMeta, describePages, describePageQuality,
-  parseTextMeta, MIN_CITATION_DENSITY,
+  parseTextMeta, MIN_CITATION_DENSITY, TEXT_META_VERSION,
 } from '../src/pdf.js';
 import {
   resolvePaperFulltextLimit, resolveCutReferences, clipFullText,
@@ -504,7 +504,7 @@ describe('§5.4 GET /api/papers/:id 的 lazy 補算與 rebuild 端點', () => {
     const body = await res.json();
     assert.equal(res.status, 200);
     assert.equal(body.text_meta.references.cut, true);
-    assert.equal(body.text_meta.version, 1);
+    assert.equal(body.text_meta.version, TEXT_META_VERSION);
     assert.equal(body.full_text_limit, resolvePaperFulltextLimit());
 
     const stored = parseTextMeta(db.prepare('SELECT text_meta FROM papers WHERE id = ?').get(paperId).text_meta);

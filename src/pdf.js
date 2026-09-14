@@ -106,13 +106,22 @@ export function describePages(pages = []) {
   return pages.map((page, i) => describePageQuality(page, i + 1, i === pages.length - 1));
 }
 
-// ── 參考文獻區塊（工單 13 §3.2）──────────────────────────────────────────
+// ── 參考文獻區塊（工單 13 §3.2、工單 16）─────────────────────────────────
 //
 // 為什麼是「切區塊」不是「切尾巴」：她的 Cell Press 那篇（Immunity）REFERENCES 在 60%，
 // 後面還有 Highlights、圖注與 KEY RESOURCES TABLE；切到文末會把方法與圖注一起砍掉。
-// 為什麼要 ≥50% 的位置門檻：正文裡「see References」「references therein」也會獨立成行
-//（她 jGPpnD 那篇 40.6% 就有一個真的 References 標題，但那是 Nature 版式的正文引文表，
-// 後面還有 Methods）。取最後一個 ≥50% 的候選是最保守的選法。
+//
+// 位置門檻的由來（工單 16 §3.1 放寬）：正文裡「see References」也會獨立成行，所以候選
+// 要夠靠後才算數。工單 13 訂 ≥50%，代價是 Nature 版式吃不到——她 jGPpnD 那篇的主文獻表
+// 在 **40.6%**（正文 → References → Methods），被 50% 擋掉，只切到 70% 的 840 字補充文獻。
+// 工單 16 把門檻降到 **35%**，並且對 [35%, 50%) 的候選加兩道閂：
+//   (a) 區塊終點必須是**明確的章節標題**——不是文末、也不是尾端密度回退出來的點；
+//   (b) 區塊至少 2,000 字。
+// 兩道閂要擋的是「正文中間一行 References」把正文整段挖掉（那比不切嚴重得多）。
+// ≥50% 的候選行為與工單 13 逐字相同（終點可以是文末、可以是尾端回退）。
+//
+// 另外工單 16 §3.2 起**所有**通過門檻的候選都切（不再只取最後一個）：Nature 版式的
+// 主文獻表與 Methods 補充文獻表是兩塊，兩塊都要讓出窗口。
 
 /** 獨立成行的「參考文獻」標題。 */
 const REFERENCES_HEADING = /^(references?|bibliography|literature cited|参考文献|參考文獻|reference list)\s*[:：]?\s*$/i;
@@ -139,8 +148,14 @@ const CITATION_PATTERNS = [
 /** 每千字至少要有這麼多個引用特徵，才承認那是參考文獻區塊。 */
 export const MIN_CITATION_DENSITY = 6;
 
-/** 候選標題至少要落在全文這個比例之後。 */
-const MIN_HEADING_RATIO = 0.5;
+/** 候選標題至少要落在全文這個比例之後（工單 16 §3.1：50% → 35%）。 */
+const MIN_HEADING_RATIO = 0.35;
+
+/** 這個比例以後的候選照工單 13 的老規矩走；之前的要多過兩道閂（工單 16 §3.1）。 */
+const SAFE_HEADING_RATIO = 0.5;
+
+/** [35%, 50%) 的候選至少要這麼長，才承認它是文獻表而不是正文。 */
+const EARLY_MIN_BLOCK_CHARS = 2000;
 
 /** 尾端回退的視窗大小（字元）。 */
 const TAIL_WINDOW = 1000;
@@ -198,44 +213,100 @@ function trimReferencesTail(text, start, end) {
 }
 
 /**
+ * 一個候選標題 → 它的區塊與判決。
+ *
+ * `[35%, 50%)` 的候選（工單 16 §3.1）多兩道閂，理由見本節開頭：終點必須是明確的章節
+ * 標題（`nextSection` 存在**而且**尾端密度回退沒有動過它），且區塊 ≥ 2,000 字。
+ */
+function evaluateCandidate(text, heading, sectionStarts) {
+  const nextSection = sectionStarts.find(start => start >= heading.lineEnd);
+  const rawEnd = nextSection === undefined ? text.length : nextSection;
+  const end = trimReferencesTail(text, heading.offset, rawEnd);
+  const chars = end - heading.offset;
+  const density = citationDensity(text.slice(heading.offset, end));
+  const verdict = reason => ({ start: heading.offset, end, chars, heading: heading.line, density, reason });
+
+  if (heading.offset / text.length < SAFE_HEADING_RATIO) {
+    if (nextSection === undefined || end !== rawEnd) return verdict('early_open_end');
+    if (chars < EARLY_MIN_BLOCK_CHARS) return verdict('early_too_short');
+  }
+  if (density < MIN_CITATION_DENSITY) return verdict('low_density');
+  return verdict('ok');
+}
+
+/**
  * 找出全文裡的參考文獻區塊。**只回位置，不動原文**——切除只發生在送模型的那份文字上
  *（`papers.full_text` 是閱讀模式與選段偏移的事實源，工單 13／14 共同紅線）。
  *
+ * 工單 16 §3.2 起可以回多塊（Nature 版式：主文獻表 ＋ Methods 補充文獻表）。
+ * `start`／`end`／`chars` 保留成**最大那一塊**，向後相容 UI 與工單 13 的既有測試；
+ * 全部區塊的合計在 `chars_total`。
+ *
  * @param {string} fullText
- * @returns {{cut: boolean, start: number, end: number, chars: number,
- *            reason: 'ok'|'no_heading'|'low_density'|'empty', heading: string, density: number}}
+ * @returns {{cut: boolean, blocks: Array<{start,end,chars,heading,density,reason}>,
+ *            chars_total: number, start: number, end: number, chars: number,
+ *            reason: 'ok'|'no_heading'|'low_density'|'early_open_end'|'early_too_short'|'empty',
+ *            heading: string, density: number}}
  */
 export function locateReferencesBlock(fullText) {
   const text = `${fullText ?? ''}`;
-  const miss = reason => ({ cut: false, start: -1, end: -1, chars: 0, reason, heading: '', density: 0 });
+  const miss = reason => ({
+    cut: false, blocks: [], chars_total: 0,
+    start: -1, end: -1, chars: 0, reason, heading: '', density: 0,
+  });
   if (text.length === 0) return miss('empty');
 
   const lines = text.split('\n');
   let offset = 0;
-  let heading = null;
+  const headings = [];
   const sectionStarts = [];
   for (const raw of lines) {
     const line = raw.trim();
     if (line) {
       if (REFERENCES_HEADING.test(line) && offset / text.length >= MIN_HEADING_RATIO) {
-        heading = { offset, line, lineEnd: offset + raw.length + 1 };
+        headings.push({ offset, line, lineEnd: offset + raw.length + 1 });
       }
       if (NEXT_SECTION_HEADING.test(line)) sectionStarts.push(offset);
     }
     offset += raw.length + 1;
   }
-  if (!heading) return miss('no_heading');
+  if (headings.length === 0) return miss('no_heading');
 
-  const nextSection = sectionStarts.find(start => start >= heading.lineEnd);
-  const rawEnd = nextSection === undefined ? text.length : nextSection;
-  const end = trimReferencesTail(text, heading.offset, rawEnd);
-  const block = text.slice(heading.offset, end);
-  const density = citationDensity(block);
-
-  if (density < MIN_CITATION_DENSITY) {
-    return { cut: false, start: heading.offset, end, chars: block.length, reason: 'low_density', heading: heading.line, density };
+  // 由後往前掃所有候選：每個各算區塊、各過門檻。全都不過時，回最後一個（位置最靠後、
+  // 最可能是真文獻表的那個）的理由與數字——工單 13 的單候選行為就是這條路徑。
+  const passed = [];
+  let fallback = null;
+  for (let i = headings.length - 1; i >= 0; i -= 1) {
+    const verdict = evaluateCandidate(text, headings[i], sectionStarts);
+    if (verdict.reason === 'ok') passed.push(verdict);
+    if (fallback === null) fallback = verdict;
   }
-  return { cut: true, start: heading.offset, end, chars: block.length, reason: 'ok', heading: heading.line, density };
+  if (passed.length === 0) {
+    const { start, end, chars, heading, density, reason } = fallback;
+    return { cut: false, blocks: [], chars_total: 0, start, end, chars, reason, heading, density };
+  }
+
+  // 依 start 排序、不重疊；重疊時保留較早開始的那個（它才是完整的那一塊）。
+  passed.sort((a, b) => a.start - b.start);
+  const blocks = [];
+  for (const block of passed) {
+    const prev = blocks[blocks.length - 1];
+    if (prev && block.start < prev.end) continue;
+    blocks.push(block);
+  }
+
+  const largest = blocks.reduce((best, b) => (b.chars > best.chars ? b : best));
+  return {
+    cut: true,
+    blocks,
+    chars_total: blocks.reduce((sum, b) => sum + b.chars, 0),
+    start: largest.start,
+    end: largest.end,
+    chars: largest.chars,
+    reason: 'ok',
+    heading: largest.heading,
+    density: largest.density,
+  };
 }
 
 // ── text_meta（工單 13 §3.2／§3.3）───────────────────────────────────────
@@ -244,7 +315,10 @@ export function locateReferencesBlock(fullText) {
 // 它是**推導出來的資料**，隨時可以砍掉重算（POST /api/papers/:id/text-meta/rebuild），
 // 不是事實源——事實源永遠是 `papers.full_text` 與 PDF 本身。
 
-export const TEXT_META_VERSION = 1;
+// 版本號是**自動重算的觸發器**（工單 16 §3.3）：偵測規則一改就 +1，舊論文下次被打開時
+// 由 `routes/papers.js` 的 lazy 路徑重算參考文獻那半（頁級品質沿用舊值，不重解析 PDF）。
+//   1 → 2：位置門檻 50%→35%、多區塊、多了 blocks／chars_total 兩個欄位。
+export const TEXT_META_VERSION = 2;
 
 /**
  * @param {string} fullText
@@ -252,16 +326,22 @@ export const TEXT_META_VERSION = 1;
  */
 export function buildTextMeta(fullText, pageMeta = []) {
   const refs = locateReferencesBlock(fullText);
+  const round = n => Number(n.toFixed(2));
   return {
     version: TEXT_META_VERSION,
     references: {
       cut: refs.cut,
+      blocks: refs.blocks.map(b => ({
+        start: b.start, end: b.end, chars: b.chars, heading: b.heading, density: round(b.density), reason: b.reason,
+      })),
+      chars_total: refs.chars_total,
+      // start／end／chars＝最大那一塊，向後相容（工單 16 §3.2）
       start: refs.start,
       end: refs.end,
       chars: refs.chars,
       reason: refs.reason,
       heading: refs.heading,
-      density: Number(refs.density.toFixed(2)),
+      density: round(refs.density),
     },
     pages: pageMeta,
     bad_pages: pageMeta.filter(p => p.quality !== 'ok').map(p => p.n),
