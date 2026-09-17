@@ -1,10 +1,19 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { streamChat, regenerateChat, continueChat, papersApi } from '../api';
 import { useStore, CHAT_FONT_PX, CHAT_FONT_LABELS, nextChatFontSize, thinkingLabel } from '../store';
 import { previousUserMessage } from '../lib/insight-source';
-import { formatRange, quotePreview } from '../lib/fulltext-offsets';
+import { quotePreview } from '../lib/fulltext-offsets';
+import {
+  MSG_ID_ATTR,
+  assistantTurnOf,
+  closestMessageId,
+  resolveMessageSelectionQuote,
+  selectionHint,
+  quoteCardLabel,
+  quoteJumpLabel,
+} from '../lib/message-quote';
 import CarryoverPanel from './CarryoverPanel';
 
 export function switchVersion(messages, messageId, direction) {
@@ -49,8 +58,13 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
   // 工單 14 §3.3：她按了「問這段」之後、還沒送出的那段引用（住在 store，因為來源是
   // 另一個面板的 FullTextView）。展開的引用塊則是每個氣泡各自記。
   const pendingQuote = useStore(s => s.pendingQuote);
+  const setPendingQuote = useStore(s => s.setPendingQuote);
   const clearPendingQuote = useStore(s => s.clearPendingQuote);
   const requestQuoteJump = useStore(s => s.requestQuoteJump);
+  const requestMessageJump = useStore(s => s.requestMessageJump);
+  // 工單 19 §2.4：在 AI 氣泡裡選一段 → 浮出「問這段」。`{quote, rect}` 是可以問的那種，
+  // `{hint, rect}` 是「這段字在這則回覆裡不只出現一次」那種（只給一句話，不給按鈕）。
+  const [replySelection, setReplySelection] = useState(null);
   // 工單 18 §2 A2：洞察浮現卡按「去對話」 → 滾到那一則並閃一下（照工單 14 的 quoteJump 那套）
   const messageJump = useStore(s => s.messageJump);
   const clearMessageJump = useStore(s => s.clearMessageJump);
@@ -95,6 +109,64 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
   useEffect(() => {
     if (pendingQuote) inputRef.current?.focus();
   }, [pendingQuote]);
+
+  /**
+   * AI 氣泡裡的選取 →「問這段」（工單 19 §2.4）。
+   *
+   * 三個閘門，缺一個就當作沒選：
+   * ① 選取的兩端要落在**同一個** `data-cr-msg-id` 容器裡（跨氣泡不算）；
+   * ② 那則訊息要是 assistant（§2.5：不做引用她自己的訊息）；
+   * ③ 選到的字要在 `plainText(content)` 裡**唯一命中**——命中多次就只給一句提示。
+   */
+  const captureReplySelection = useCallback(() => {
+    const sel = typeof window !== 'undefined' && window.getSelection ? window.getSelection() : null;
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) { setReplySelection(null); return; }
+
+    const fromId = closestMessageId(sel.anchorNode);
+    const toId = closestMessageId(sel.focusNode);
+    if (!fromId || fromId !== toId) { setReplySelection(null); return; }
+
+    const msg = messages.find(m => m.id === fromId);
+    if (!msg || msg.role !== 'assistant') { setReplySelection(null); return; }
+
+    const r = sel.getRangeAt(0).getBoundingClientRect();
+    const rect = { top: r.top, bottom: r.bottom, left: r.left, width: r.width };
+
+    const verdict = resolveMessageSelectionQuote({
+      selectedText: sel.toString(),
+      messageId: fromId,
+      content: msg.content,
+      turn: assistantTurnOf(messages, fromId),
+    });
+    if (verdict.ok) { setReplySelection({ quote: verdict.quote, rect }); return; }
+    // 選太少不必吵她（跟閱讀模式一樣安靜）；對不上／多次命中才說一句
+    if (verdict.reason === 'tooShort' || verdict.reason === 'empty') { setReplySelection(null); return; }
+    setReplySelection({ hint: selectionHint(verdict.reason), rect });
+  }, [messages]);
+
+  // 選取被清掉（點別處、按鍵）時把浮鈕收起來——同 FullTextView
+  useEffect(() => {
+    const onChange = () => {
+      const sel = window.getSelection?.();
+      if (!sel || sel.isCollapsed) setReplySelection(null);
+    };
+    document.addEventListener('selectionchange', onChange);
+    return () => document.removeEventListener('selectionchange', onChange);
+  }, []);
+
+  const handleAskReply = () => {
+    if (!replySelection?.quote) { setReplySelection(null); return; }
+    setPendingQuote(replySelection.quote);
+    setReplySelection(null);
+    try { window.getSelection()?.removeAllRanges(); } catch {}
+  };
+
+  /** 氣泡上的引用塊點「跳回…」：論文回原文那一段，AI 回答回那一則訊息（工單 18 那套）。 */
+  const jumpFromQuote = (q) => {
+    if (!q) return;
+    if (q.source === 'message') requestMessageJump(q.message_id);
+    else requestQuoteJump(q);
+  };
 
   const loadMessages = async () => {
     try {
@@ -292,6 +364,9 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
 
   const hasSummary = paper?.summary_conclusions || paper?.summary_bg;
 
+  // 窄螢幕沒地方浮，「問這段」改貼底（同 FullTextView）
+  const replyBtnNarrow = typeof window !== 'undefined' && window.innerWidth < 640;
+
   // Find last AI message for regenerate button
   let lastAIMsgId = null;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -312,7 +387,11 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
       <CarryoverPanel paperId={paperId} messageCount={messages.length} />
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto space-y-3 mb-3 min-h-0">
+      <div
+        className="flex-1 overflow-y-auto space-y-3 mb-3 min-h-0"
+        onMouseUp={captureReplySelection}
+        onTouchEnd={captureReplySelection}
+      >
         {/* Welcome message */}
         {messages.length === 0 && hasSummary && (
           <div className="chat-bubble-ai p-3">
@@ -379,7 +458,9 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
             >
               {!isUser ? (
                 <div>
-                  <div className="prose-chat">
+                  {/* 工單 19 §2.4：選取要認得出「這是哪一則回覆」，所以 markdown 容器
+                      外面釘一顆 `data-cr-msg-id`（偏移不釘在 DOM 上——那是投影的事）。 */}
+                  <div className="prose-chat" {...{ [MSG_ID_ATTR]: msg.id }}>
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
                       {msg.content}
                     </ReactMarkdown>
@@ -434,13 +515,16 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
               ) : (
                 <div>
                   {/* 工單 14 §3.3：帶引用的提問，氣泡上方縮起一塊原文；點一下展開／收起，
-                      點「跳回原文」回到閱讀模式那個位置 */}
+                      點「跳回…」回到來源（論文＝閱讀模式那個位置；AI 回答＝那一則訊息，
+                      工單 19 §2.4 走工單 18 的 messageJump） */}
                   {msg.quote && (
                     <div
                       className="cr-quote-block"
                       role="button"
                       tabIndex={0}
-                      title="點一下展開；「跳回原文」回到閱讀模式該位置"
+                      title={msg.quote.source === 'message'
+                        ? '點一下展開；「跳回那則回答」滾到那一則並閃一下'
+                        : '點一下展開；「跳回原文」回到閱讀模式該位置'}
                       onClick={() => setExpandedQuote(expandedQuote === msg.id ? null : msg.id)}
                       onKeyDown={e => {
                         if (e.key === 'Enter' || e.key === ' ') {
@@ -451,22 +535,22 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
                     >
                       <div className="flex items-center gap-1.5 mb-0.5">
                         <span className="cr-mono text-[10px] opacity-70">
-                          引用原文 · {formatRange(msg.quote)}
+                          {quoteCardLabel(msg.quote, assistantTurnOf(messages, msg.quote.message_id))}
                         </span>
                         <span
                           className="text-[10px] underline decoration-dotted opacity-80 hover:opacity-100"
                           role="button"
                           tabIndex={0}
-                          onClick={e => { e.stopPropagation(); requestQuoteJump(msg.quote); }}
+                          onClick={e => { e.stopPropagation(); jumpFromQuote(msg.quote); }}
                           onKeyDown={e => {
                             if (e.key === 'Enter' || e.key === ' ') {
                               e.preventDefault();
                               e.stopPropagation();
-                              requestQuoteJump(msg.quote);
+                              jumpFromQuote(msg.quote);
                             }
                           }}
                         >
-                          跳回原文
+                          {quoteJumpLabel(msg.quote)}
                         </span>
                       </div>
                       <span className="whitespace-pre-wrap">
@@ -572,6 +656,29 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
         <div ref={bottomRef} />
       </div>
 
+      {/* 在 AI 氣泡裡選一段 →「問這段」（工單 19 §2.4）。桌機浮在選取旁邊、窄螢幕貼底，
+          樣式與閱讀模式那顆同一顆（`cr-ask-selection`）。命中多次時同一個位置改給一句話。 */}
+      {replySelection && (
+        <button
+          className="cr-ask-selection"
+          style={replyBtnNarrow ? undefined : {
+            top: Math.max(8, replySelection.rect.top - 38),
+            left: Math.max(8, replySelection.rect.left + replySelection.rect.width / 2 - 52),
+          }}
+          data-narrow={replyBtnNarrow ? '1' : undefined}
+          data-hint={replySelection.hint ? '1' : undefined}
+          onMouseDown={e => e.preventDefault()}   // 別讓按下去就把選取清掉
+          onClick={handleAskReply}
+        >
+          {replySelection.hint ? replySelection.hint : (
+            <>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+              問這段
+            </>
+          )}
+        </button>
+      )}
+
       {/* Input */}
       <div className="shrink-0 space-y-1.5">
         {/* 引用卡（工單 14 §3.3）：她在閱讀模式選了一段按「問這段」之後停在這裡，
@@ -580,7 +687,7 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
           <div className="cr-quote-card">
             <div className="cr-quote-card-text">
               <div className="cr-mono text-[10px] opacity-70 mb-0.5">
-                引用原文 · {formatRange(pendingQuote)}
+                {quoteCardLabel(pendingQuote)}
               </div>
               {quotePreview(pendingQuote.text)}
             </div>
@@ -599,7 +706,9 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
             className="cr-chat-input flex-1 border border-border bg-surface rounded-2xl px-4 py-2.5 resize-none shadow-sm focus:outline-none focus:border-accent"
             rows={2}
             placeholder={pendingQuote
-              ? '想問這段什麼？直接 Enter 就讓 AI 解釋這一段'
+              ? (pendingQuote.source === 'message'
+                ? '想追問這段回答什麼？直接 Enter 就讓 AI 說明這一段'
+                : '想問這段什麼？直接 Enter 就讓 AI 解釋這一段')
               : '追問，或貼上一段原文一起讀…（Enter 送出，Shift+Enter 換行）'}
             value={input}
             onChange={e => setInput(e.target.value)}

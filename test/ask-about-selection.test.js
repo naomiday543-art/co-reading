@@ -167,7 +167,8 @@ describe('位置脈絡（§3.2 變動區）', () => {
   test('沒有 quote → 空字串（呼叫端直接串接）', () => {
     assert.equal(buildQuoteContextBlock(FULL_TEXT, null), '');
     assert.equal(quoteLogLabel(null), 'none');
-    assert.equal(quoteLogLabel({ start: 10, end: 30 }), '20字');
+    // 工單 19 §2.4：`quote=<source>:<chars>`，沒寫來源就是 paper
+    assert.equal(quoteLogLabel({ start: 10, end: 30 }), 'paper:20字');
   });
 });
 
@@ -424,7 +425,8 @@ describe('討論路由：帶選段送出（§5.1–§5.3、§5.6）', () => {
       });
       const withQuote = getRecentLogs(50).find(l => l.includes('[CHAT] start') && l.includes(paper.id));
       assert.ok(withQuote, '找得到這一輪的 [CHAT] start');
-      assert.match(withQuote, new RegExp(`quote=${PARA_2.length}字`));
+      // 工單 19 §2.4 把這一欄加上來源（`quote=<source>:<chars>`）——引用論文仍是 paper。
+      assert.match(withQuote, new RegExp(`quote=paper:${PARA_2.length}字`));
 
       await send(paper.id, { message: '再問' });
       const withoutQuote = getRecentLogs(50).find(l => l.includes('[CHAT] start') && l.includes(paper.id));

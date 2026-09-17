@@ -232,6 +232,16 @@
         left: 50%; transform: translateX(-50%); top: auto; bottom: 82px;
         padding: 9px 20px; font-size: 13px;
       }
+      /* 工單 19 §2.4：AI 氣泡裡選到的字在這則回覆裡不只出現一次 ⇒ 同一個位置改給一句話
+         （不是按鈕，點一下只是把它收掉） */
+      .cr-ask-selection[data-hint] {
+        background: var(--surface); color: var(--muted);
+        border: 1px solid var(--border); cursor: default;
+        max-width: min(78vw, 300px); text-align: center; line-height: 1.4;
+      }
+      .cr-ask-selection[data-hint]:hover { background: var(--surface); }
+      /* AI 氣泡的選取色：跟文字版原文同一套，讓「可以選來問」看起來是同一件事 */
+      .prose-chat ::selection { background: var(--accent-soft); color: var(--text-strong); }
 
       /* 跳回原文時那一段的閃一下 */
       .cr-quote-flash {
