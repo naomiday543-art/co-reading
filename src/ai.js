@@ -1307,8 +1307,10 @@ function cacheHitOf(usage) {
  * @param {object} [options]
  * @param {(text: string) => void} [options.onReasoning] 思考鏈 delta（只用來算字數，內容不外流）
  * @param {AbortSignal} [options.signal] 她按「停止」／關頁面時用來收掉上游那條連線
- * @param {{text: string, start: number, end: number}} [options.quote] 這一輪引用的原文選段（工單 14）
- *        ——只用來在**變動區**補一段位置脈絡；選段本身走 `userMessage`，絕不進穩定前綴
+ * @param {{text: string, start: number, end: number, source?: string,
+ *          sourceText?: string, userQuestion?: string, turn?: number}} [options.quote]
+ *        這一輪引用的選段（工單 14 論文原文／工單 19 AI 先前的回答）——只用來在**變動區**
+ *        補一段脈絡；選段本身走 `userMessage`，絕不進穩定前綴
  * @param {number} [options.idleTimeoutMs] 覆蓋閒置逾時（預設讀 CHAT_IDLE_TIMEOUT_MS）
  * @param {number} [options.timeoutMs] 覆蓋單次請求總逾時
  * @param {number} [options.retries] 覆蓋重試次數（預設讀 CHAT_RETRIES）
@@ -1389,7 +1391,19 @@ export async function chatAboutPaper(paper, history, userMessage, onChunk, optio
   // 選段的位置脈絡（工單 14 §3.2）：前後各 600 字原文，讓模型知道這句話在哪、承接什麼。
   // 接在變動區最後——**穩定前綴（憲章＋論文區塊）逐字不變**，不帶 quote 時這裡是空字串，
   // 送出的 body 與工單 14 之前逐字相同（§5.3 的零回歸線）。
-  if (quote) insightText += buildQuoteContextBlock(paper.full_text, quote);
+  //
+  // 工單 19：引用 AI 自己的回答時，脈絡的來源不是論文而是**那則回答的純文字投影**
+  // （由 routes/chat.js 現查後掛在 `options.quote.sourceText`），連同輪次與她當時問的
+  // 那句一起給。位置照舊——變動區最後，穩定前綴一個字都不動。
+  if (quote) {
+    const contextSource = quote.source === 'message'
+      ? (options.quote?.sourceText || '')
+      : paper.full_text;
+    insightText += buildQuoteContextBlock(contextSource, quote, {
+      userQuestion: options.quote?.userQuestion || '',
+      turn: options.quote?.turn ?? null,
+    });
+  }
 
   // Build system: [憲章 block, 論文 block, (變動區)] for anthropic; plain string for openai
   let systemForRequest;

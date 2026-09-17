@@ -2,7 +2,14 @@ import { Router } from 'express';
 import { nanoid } from 'nanoid';
 import db from '../db.js';
 import { chatAboutPaper, ChatAbortedError, analyzeErrorKind } from '../ai.js';
-import { parseQuote, validateQuote, renderQuotedMessage } from '../quote.js';
+import {
+  parseQuote,
+  validateQuote,
+  renderQuotedMessage,
+  quoteSource,
+  assistantTurnMap,
+} from '../quote.js';
+import { plainText } from '../markdownPlain.js';
 import { log } from '../logger.js';
 
 const router = Router();
@@ -127,6 +134,35 @@ async function runChatStream(res, { paper, history, userMessage, hint, quote = n
   }
 }
 
+/**
+ * 引用 AI 回答那一型要額外帶給 `chatAboutPaper` 的三件事（工單 19 §2.3）。
+ *
+ * `quote` JSON 裡只有 `{text,start,end,page,source,message_id}`——輪次、那則回答的
+ * 全文、她當時問的那句都要現查。三個入口（送出／重新生成／繼續）都走這一顆，
+ * 算法只有一份，歷史回放才跟送出當輪逐字相同。
+ *
+ * @param {Array<{id,role,content,seq}>} allMsgs 這篇論文依 seq 排好的全部訊息
+ * @returns {{turn: number|null, sourceText: string, userQuestion: string}}
+ */
+function messageQuoteRuntime(allMsgs, quote) {
+  if (!quote || quoteSource(quote) !== 'message') {
+    return { turn: null, sourceText: '', userQuestion: '' };
+  }
+  const idx = allMsgs.findIndex(m => m.id === quote.message_id);
+  if (idx < 0) return { turn: null, sourceText: '', userQuestion: '' };
+
+  const target = allMsgs[idx];
+  let userQuestion = '';
+  for (let i = idx - 1; i >= 0; i -= 1) {
+    if (allMsgs[i].role === 'user') { userQuestion = allMsgs[i].content || ''; break; }
+  }
+  return {
+    turn: assistantTurnMap(allMsgs).get(target.id) ?? null,
+    sourceText: plainText(target.content),
+    userQuestion,
+  };
+}
+
 function nextSeq(paperId) {
   const row = db.prepare(
     'SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM messages WHERE paper_id = ?'
@@ -148,22 +184,31 @@ function nextSeq(paperId) {
  * @returns {{history: Array<{role: string, content: string}>, lastQuote: object|null}}
  */
 function loadHistory(paper, { beforeSeq = null } = {}) {
-  const rows = beforeSeq === null
-    ? db.prepare(
-      'SELECT role, content, quote FROM messages WHERE paper_id = ? ORDER BY seq ASC'
-    ).all(paper.id)
-    : db.prepare(
-      'SELECT role, content, quote FROM messages WHERE paper_id = ? AND seq < ? ORDER BY seq ASC'
-    ).all(paper.id, beforeSeq);
+  // 一次撈整串（工單 19）：引用 AI 回答那一型要從**整串**反推輪次、找回那則回答的全文
+  // 與她當時的問題，只看 `beforeSeq` 之前那一截是不夠的（被引用的回答本來就在前面，
+  // 但輪次要照整串數才跟前端顯示的一致）。
+  const allMsgs = db.prepare(
+    'SELECT id, role, content, seq, quote FROM messages WHERE paper_id = ? ORDER BY seq ASC'
+  ).all(paper.id);
+  const turns = assistantTurnMap(allMsgs);
+  const rows = beforeSeq === null ? allMsgs : allMsgs.filter(m => m.seq < beforeSeq);
 
   let lastQuote = null;
   const history = rows.map(m => {
     if (m.role !== 'user') return { role: m.role, content: m.content };
     const quote = parseQuote(m.quote);
+    const turn = quote && quoteSource(quote) === 'message'
+      ? (turns.get(quote.message_id) ?? null)
+      : null;
     // 最後一則 user 沒引用就是沒有，不沿用更早那次的。`question` 只是傳給 ai.js 當洞察
     // 搜尋的關鍵字（不進 DB 的 quote JSON、不影響驗證）。
-    lastQuote = quote ? { ...quote, question: m.content } : null;
-    return { role: m.role, content: renderQuotedMessage(quote, m.content, paper.full_text) };
+    lastQuote = quote
+      ? { ...quote, question: m.content, ...messageQuoteRuntime(allMsgs, quote) }
+      : null;
+    return {
+      role: m.role,
+      content: renderQuotedMessage(quote, m.content, paper.full_text, { turn }),
+    };
   });
 
   return { history, lastQuote };
@@ -183,9 +228,26 @@ router.post('/:id/chat', async (req, res) => {
 
   // 工單 14 §3.1：只選了一段、沒打字也算數（用預設問題）——所以「空」的判斷要在驗過
   // quote 之後。驗不過一律 400，不寫 DB、不打上游。
+  //
+  // 工單 19 §2.2：偏移的基準由來源決定——引用論文是 `full_text` 原字串，引用 AI 回答
+  // 是那則回覆的**純文字投影**（畫面上的字），不是 DB 裡的 markdown。
   let quote = null;
   if (!regenerate && !continueChat && rawQuote !== undefined && rawQuote !== null && rawQuote !== '') {
-    const verdict = validateQuote(paper.full_text, rawQuote);
+    const parsed = parseQuote(rawQuote);
+    if (!parsed) return res.status(400).json({ error: '引用格式不正確' });
+
+    let baseText = paper.full_text;
+    if (quoteSource(parsed) === 'message') {
+      const target = db.prepare(
+        'SELECT id, role, content FROM messages WHERE id = ? AND paper_id = ?'
+      ).get(parsed.message_id, paperId);
+      // 不是這篇論文的訊息、或根本不是 AI 說的話 ⇒ 400（§2.5：不做引用她自己的訊息）
+      if (!target) return res.status(400).json({ error: '找不到被引用的回覆' });
+      if (target.role !== 'assistant') return res.status(400).json({ error: '只能引用 AI 的回覆' });
+      baseText = plainText(target.content);
+    }
+
+    const verdict = validateQuote(baseText, rawQuote);
     if (!verdict.ok) return res.status(400).json({ error: verdict.error });
     quote = verdict.quote;
   }
@@ -255,6 +317,13 @@ router.post('/:id/chat', async (req, res) => {
   }
 
   // ── Default: normal send ──
+  // 引用 AI 回答時要的三件事（輪次／那則回答的全文／她當時問的那句）在寫入之前先算完：
+  // 新寫進去的這一則 user 不影響輪次（輪次只數 assistant），但先算比較好讀。
+  const beforeMsgs = db.prepare(
+    'SELECT id, role, content, seq FROM messages WHERE paper_id = ? ORDER BY seq ASC'
+  ).all(paperId);
+  const runtime = messageQuoteRuntime(beforeMsgs, quote);
+
   // Save user message
   const typed = (message || '').trim();
   const userMsgId = nanoid();
@@ -277,8 +346,8 @@ router.post('/:id/chat', async (req, res) => {
     paper,
     history,
     // 送模型的是「引用＋問題」渲染後的整串；DB 裡那一列仍然只有 `typed`（§4 紅線）。
-    userMessage: renderQuotedMessage(quote, typed, paper.full_text),
-    quote: quote ? { ...quote, question: typed } : null,
+    userMessage: renderQuotedMessage(quote, typed, paper.full_text, { turn: runtime.turn }),
+    quote: quote ? { ...quote, question: typed, ...runtime } : null,
     hint: '你的問題已保存——按「重新生成」或「繼續」都能讓 AI 接著回答',
   });
 
