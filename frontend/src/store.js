@@ -175,9 +175,12 @@ export const useStore = create((set, get) => ({
     set({ chatFontSize: next });
   },
 
-  // ── 選一段問它（工單 14 §3.3）──────────────────────────────────────
-  // `pendingQuote`：她在閱讀模式按了「問這段」、還沒送出的那段引用（`{text,start,end}`）。
-  // `quoteJump`：她點了氣泡上的引用塊，要跳回原文那個位置。
+  // ── 選一段問它（工單 14 §3.3；工單 19 §2.4 多一種來源）────────────
+  // `pendingQuote`：按了「問這段」、還沒送出的那段引用。兩種形狀共用這一格——
+  //   論文原文 `{text,start,end}`（偏移對 `full_text`）；
+  //   AI 回答 `{source:'message',message_id,text,start,end,turn}`（偏移對純文字投影）。
+  // `quoteJump`：她點了氣泡上的引用塊，要跳回原文那個位置（引用 AI 回答那型改走
+  //   `messageJump`，因為目標是同一個面板裡的某一則訊息）。
   // **兩個都不持久化**——這是一次動作，不是偏好；重整就該乾淨。
   pendingQuote: null,
   setPendingQuote: (quote) => set({ pendingQuote: quote || null }),
