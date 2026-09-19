@@ -84,3 +84,15 @@ CREATE TABLE IF NOT EXISTS refine_cursor (
 
 ## 七、交付
 分三個 commit（A1+A2／A3／A4+A5），每個帶測試；報告 `docs/work/report-20-direction-line-20260919.md`（changed-file list、沒改什麼、測試數字、假 gateway 抓到的 body 原文一份）；偏離寫本檔附錄 A；最終回覆十行內。commit 結尾 `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`。
+
+---
+
+## 附錄 A：實作偏離（2026-09-19，tip `d97f7d1`）
+
+設計 A1–A5 全部照做，以下五處與工單字面不同，都是為了測得到或不去動她正在跑的東西：
+
+1. **`directionOfPaper` 多了一個 `database` 注入口。** 工單 §二寫它「現成可用」，但它綁在 module 層的 `db` 上，鍵解析就測不了記憶體 DB。改成 `directionOfPaper(paperId, { database = db } = {})`，**既有三個呼叫點一個字都不用改**，`directions.test.js` 全綠。
+2. **`test/carryover.test.js` 的 fixture 補了三處 schema**（`papers.tree_node_id`、`tree_nodes` 表、`refine_cursor` 表）。原 fixture 沒有這些表，鍵解析會在查方向時拋（生產 schema 有，所以這是把 fixture 補成真的，不是遷就）。**12 條斷言一條沒改，全綠**——這就是紅線 5「未掛方向零回歸」的活證據。
+3. **`requestRefine` 的回傳與 `POST /refine` 的回應多了 `session_key`／`scope`／`direction`。** 工單 A3 只寫 GET 加欄位。多這三欄是**自家 API 的回應**，不是出海 payload（紅線 1 只管出海），面板精煉完才知道自己剛餵進哪條線。前端實際上是精煉後再 `load()` 一次，這三欄目前只作記錄與除錯用。
+4. **`npm run build` 建到暫存目錄驗，沒有覆蓋 `dist/`。** 她的 `npm start`／`npm run dev` 靠 `dist/` 出畫面，覆蓋等於當場換掉她正在看的頁面。build 綠（311 modules），`dist/` mtime 仍是 9/14。**代價：A4／A5 的畫面要等她自己 build。**
+5. **她的 `node --watch` 自己重啟了 12 次，並把 `refine_cursor` 建進了 live DB**（唯讀確認：表在、0 列、`carryover_cache` 原有那列沒動）。我沒有下過重啟命令，也沒有寫過 `data/`；是改 `src/` 觸發她自己的 watch。記在這裡是因為紅線 6 提到那顆 DB。
