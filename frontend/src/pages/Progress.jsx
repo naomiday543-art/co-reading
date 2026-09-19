@@ -105,6 +105,7 @@ export default function Progress({ onNavigate }) {
   const refinedCount = papers.filter(p => p.refine_state === 'fresh').length;
   const unrefined = papers.filter(p => p.refine_state === 'never' || p.refine_state === 'new_messages');
   const stalePapers = papers.filter(p => p.refine_state === 'stale');
+  const undiscussed = papers.filter(p => p.refine_state === 'no_discussion');
 
   /**
    * 逐篇精煉（§三 B2）：不加後端，前端序列呼叫既有 `POST /api/papers/:id/refine`，
@@ -116,18 +117,27 @@ export default function Progress({ onNavigate }) {
     if (queue.length === 0 || refining) return;
     stopRef.current = false;
     setError('');
+    const failures = [];
+    let consecutive = 0;
     for (let i = 0; i < queue.length; i++) {
       if (stopRef.current) break;
       setRefining({ index: i + 1, total: queue.length, title: queue[i].title, id: queue[i].id });
       try {
         await papersApi.refine(queue[i].id);
+        consecutive = 0;
       } catch (e) {
-        // 一篇失敗就停：網路不穩的時候連著打只會把上游打得更死。
-        setError(`「${shortPaperTitle(queue[i].title, 16)}」精煉失敗：${e.message}`);
-        break;
+        // 一篇失敗記下來、繼續下一篇（親驗時一篇 400 把整條佇列卡死過）；
+        // 連續兩篇失敗才停：那多半是上游掛了，連著打只會把它打得更死。
+        failures.push(`「${shortPaperTitle(queue[i].title, 16)}」：${e.message}`);
+        consecutive += 1;
+        if (consecutive >= 2) {
+          failures.push('連續兩篇失敗，先停下來。');
+          break;
+        }
       }
       await load();
     }
+    if (failures.length > 0) setError(`精煉失敗 ${failures.length - (failures.at(-1).startsWith('連續') ? 1 : 0)} 篇：${failures.join('；')}`);
     setRefining(null);
   };
 
@@ -227,7 +237,14 @@ export default function Progress({ onNavigate }) {
             </>
           ) : (
             <>
-              <span className="text-[12.5px] text-hyp">這個方向還有 {unrefined.length} 篇沒精煉</span>
+              <span className="text-[12.5px] text-hyp">
+                這個方向還有 {unrefined.length} 篇沒精煉
+                {undiscussed.length > 0 && (
+                  <span className="text-faint" title="沒聊過的論文沒東西可精煉；先到論文頁跟 AI 討論幾句">
+                    （另 {undiscussed.length} 篇還沒討論過）
+                  </span>
+                )}
+              </span>
               <button
                 className="text-[12px] px-2 py-0.5 rounded-lg border border-accent text-accent hover:bg-accent-soft transition-colors"
                 onClick={refineAll}

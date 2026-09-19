@@ -56,12 +56,17 @@ export function listDirectionPapers(nodeId, { database = db } = {}) {
     counts.set(row.paper_id, row.n);
   }
 
-  return papers.map(p => ({
-    id: p.id,
-    title: p.title || '',
-    message_count: counts.get(p.id) || 0,
-    refine_state: refineStaleness(p.id, { database }),
-  }));
+  // 0～1 則對話的論文沒東西可精煉（後端 refine 會 400「對話不足 2 條」），標成 no_discussion，
+  // 「逐篇精煉」的佇列與「還有 N 篇沒精煉」都不算它——親驗時就是這一篇把整條佇列卡死的。
+  return papers.map(p => {
+    const messageCount = counts.get(p.id) || 0;
+    return {
+      id: p.id,
+      title: p.title || '',
+      message_count: messageCount,
+      refine_state: messageCount < 2 ? 'no_discussion' : refineStaleness(p.id, { database }),
+    };
+  });
 }
 
 /**

@@ -110,6 +110,16 @@ describe('listDirectionPapers（§三 B1：含子節點的論文）', () => {
     assert.equal(papers[1].message_count, 2);
   });
 
+  it('0～1 則對話的論文 refine_state=no_discussion（逐篇精煉不納入）', () => {
+    const db = seedDirection(makeDb());
+    addPaper(db, { id: 'pEmpty', title: 'no chat', nodeId: 'dirNano', createdAt: 5, messages: 0 });
+    const rows = listDirectionPapers('dirNano', { database: db });
+    const empty = rows.find(p => p.id === 'pEmpty');
+    assert.ok(empty, 'pEmpty 應在方向底下');
+    assert.equal(empty.message_count, 0);
+    assert.equal(empty.refine_state, 'no_discussion');
+  });
+
   it('每篇帶 refine_state（never／fresh／new_messages）', () => {
     const db = seedDirection(makeDb());
     assert.equal(listDirectionPapers('dirNano', { database: db })[0].refine_state, 'never');
