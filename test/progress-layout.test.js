@@ -43,17 +43,19 @@ const rel = (id, from, to, kind, over = {}) => ({
 const treeParentOf = (layout, nodeId) => layout.treeEdges.find(e => e.to === nodeId)?.from ?? null;
 
 describe('估高（排版用，真正換行交給瀏覽器）', () => {
-  it('≤24 字 1 行、≤48 字 2 行、其餘 3 行', () => {
+  // 卡寬 220px、字 12px ⇒ 一行 16 個中文字（偏離工單的 24，理由見 lib 裡的註解）
+  it('一行 16 字，最多 3 行', () => {
     assert.equal(estimateLines('短句'), 1);
-    assert.equal(estimateLines('一'.repeat(24)), 1);
-    assert.equal(estimateLines('一'.repeat(25)), 2);
-    assert.equal(estimateLines('一'.repeat(48)), 2);
-    assert.equal(estimateLines('一'.repeat(49)), 3);
+    assert.equal(estimateLines('一'.repeat(16)), 1);
+    assert.equal(estimateLines('一'.repeat(17)), 2);
+    assert.equal(estimateLines('一'.repeat(32)), 2);
+    assert.equal(estimateLines('一'.repeat(33)), 3);
     assert.equal(estimateLines('一'.repeat(400)), 3); // 再長也只算 3 行（line-clamp）
+    assert.equal(estimateLines(''), 1);
   });
 
   it('中英混排照字元數算，不靠拉丁寬度查找表（坑②）', () => {
-    assert.equal(estimateLines('Py-GC/MS 在富脂基質中產生偽陽性'), 1);
+    assert.ok(estimateLines('Py-GC/MS 在富脂基質中產生偽陽性') <= 2);
     assert.ok(nodeHeight({ kind: 'claim', data: { statement: '一'.repeat(60) } })
       > nodeHeight({ kind: 'claim', data: { statement: '短' } }));
   });

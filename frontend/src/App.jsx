@@ -7,6 +7,7 @@ import Library from './pages/Library';
 import PaperDetail from './pages/PaperDetail';
 import Settings from './pages/Settings';
 import Compare from './pages/Compare';
+import Progress from './pages/Progress';
 import InsightsPanel from './components/InsightsPanel';
 
 const NAV_STORAGE_KEY = 'co-reading:nav';
@@ -165,6 +166,8 @@ export default function App() {
           {page === 'detail' && <PaperDetail paperId={paperId} onBack={() => navigate('library')} onNavigate={navigate} />}
           {/* 摘要對比（工單 09 §3.3）：sidebar 照常，不進 mobile tabbar */}
           {page === 'compare' && <Compare onNavigate={navigate} />}
+          {/* 研究進度圖（工單 21）：一個方向一張，唯讀 */}
+          {page === 'progress' && <Progress onNavigate={navigate} />}
           {page === 'insights' && <InsightsPanel onNavigate={navigate} />}
           {page === 'settings' && <Settings />}
         </main>

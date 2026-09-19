@@ -38,14 +38,22 @@ export const paperNodeId = (id) => `paper:${id}`;
 export const claimNodeId = (id) => `claim:${id}`;
 
 /**
- * statement 要幾行（§五：≤24 字 1 行、≤48 字 2 行、其餘 3 行）。
- * 只用來排版；`-webkit-line-clamp:3` 才是真正的截斷。
+ * 一行放得下幾個中文字。
+ *
+ * **偏離工單 §五（≤24／≤48）**：卡寬 220px 扣掉色條與左右 padding 剩約 200px，
+ * statement 是 12px，一個中文字就是 12px ⇒ 一行只放得下 16 個字。照 24 估會把
+ * 兩行的句子當一行，卡片高度不夠、字被 `overflow:hidden` 切掉。估算的用途是排版，
+ * 排得對才有意義，所以照量到的數字走（拉丁字母更窄，中文是最壞情況）。
+ */
+export const CHARS_PER_LINE = 16;
+export const MAX_LINES = 3; // 與 CSS 的 `-webkit-line-clamp:3` 同一個數字
+
+/**
+ * statement 要幾行。只用來排版；真正的換行與截斷交給瀏覽器（坑②）。
  */
 export function estimateLines(statement = '') {
   const len = [...String(statement || '')].length;
-  if (len <= 24) return 1;
-  if (len <= 48) return 2;
-  return 3;
+  return Math.min(MAX_LINES, Math.max(1, Math.ceil(len / CHARS_PER_LINE)));
 }
 
 /** 節點高度估算（排版用）。 */

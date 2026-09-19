@@ -56,3 +56,30 @@ fixture：3 篇論文（9／9／8 條）＋7 條討論產生、33 條 active cla
 
 ### 測試
 `npm test`：**552 全綠**（基線 507 → ①524 → ②552）。
+
+---
+
+## 三、Commit ③：頁面＋圖＋側欄入口
+
+### 改了什麼
+| 檔 | 動作 |
+|---|---|
+| `frontend/src/pages/Progress.jsx` | **新**。頁頂（方向下拉／統計／開關／適應視窗）＋篩選 chips＋畫布 |
+| `frontend/src/components/ProgressGraph.jsx` | **新**。SVG 邊層 ＋ HTML 節點層 |
+| `frontend/src/lib/claim-visual.js` | **新**。ORIGIN_BADGE／色條／kind 中文／邊樣式／論文短名（共用常數） |
+| `frontend/src/api.js` | ＋`directionsApi.progress(nodeId)` |
+| `frontend/src/App.jsx` | ＋`page === 'progress'` |
+| `frontend/src/components/Sidebar.jsx` | ＋「研究」區塊的「研究進度」入口（洞察上面） |
+| `frontend/index.html` | ＋`.cr-node-statement`／`.cr-node-desc` 的 CJK 換行規則 |
+| `frontend/src/lib/progressLayout.js`／`test/progress-layout.test.js` | 估行改 16 字／行（見附錄 A 偏離①） |
+
+### 幾個關鍵決定
+- **節點是 HTML、邊是 SVG**（坑②）：`overflow-wrap:anywhere; line-break:strict; -webkit-line-clamp:3` 寫在 `index.html` 的 `<style>` 裡（Tailwind CDN 沒有這些 utility），完整句放 `title`。
+- **顏色全用既有語意色**：色條＝`--accent`（論文報告類）／`--muted`（假設類）／`--faint`／`--danger`；矛盾＝`--danger` 紅虛線 2px、跨篇再粗 0.5px；`superseded_by`＝灰虛線帶箭頭。深色模式自動跟著翻，沒有寫死色碼。
+- **不做縮放手勢**：只有「適應視窗」一顆按鈕，CSS `transform: scale()`，下限 0.5。
+- **統計用 gateway 的 `counts`**（整線帳，不隨 `include` 變），論文精煉數用本地的 `refine_state`。
+- **降級與藏起來的邊會說出來**：頁面底下一行小字報「N 條矛盾邊的另一端不在圖上／N 條多父成環已降級／N 條懸空邊已略過」——紅線 3 不允許靜靜吞掉。
+- `supersede_reason` 照 gateway 現況（舊 statement 前 120 字）寫成「原本是：…」，不寫「取代原因」。
+
+### 驗證
+`npm test` **552 全綠**；`npx vite build --outDir <scratchpad>/dist-wo21-c3` 綠（349 modules，507.77 kB／gzip 156.06 kB），**`dist/` 沒被覆蓋**（mtime 仍是她 16:55 那次）。

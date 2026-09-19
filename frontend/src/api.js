@@ -68,6 +68,12 @@ export const treeApi = {
   delete: (id) => request(`/tree/${id}`, { method: 'DELETE' }),
 };
 
+// 研究進度圖（工單 21 §三 B1）。co-reading 後端代理，前端不直連 gateway。
+// 一次回整條線（含被取代的）——「顯示走過的路」開關是前端的事，不重打一趟。
+export const directionsApi = {
+  progress: (nodeId) => request(`/directions/${nodeId}/progress`),
+};
+
 export const settingsApi = {
   get: () => request('/settings'),
   save: (data) => request('/settings', { method: 'PUT', body: data }),
