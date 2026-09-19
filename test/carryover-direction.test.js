@@ -1,5 +1,5 @@
 // 工單 20：方向線——精煉餵進論文所屬的研究方向，而不是單篇。
-// 本 commit（A1+A2）覆蓋 §六 的 1／2／5／6：鍵解析、每篇游標、出海 body、零回歸。
+// 覆蓋 §六 的六條驗證：鍵解析、每篇游標、staleness、full 全文重送、出海 body、零回歸。
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
@@ -11,6 +11,7 @@ import {
   requestRefine,
   getRefineCursor,
   coveredDigest,
+  refineStaleness,
   renderCarryoverForInjection,
   setCarryoverInjected,
   cacheCarryover,
@@ -244,6 +245,70 @@ describe('refine_cursor（工單 20 §A2）', () => {
     assert.equal(f.calls[1].body.paper_id, 'pB');
     assert.equal(getRefineCursor('pA', { database: db }).lastSeq, 4);
     assert.equal(getRefineCursor('pB', { database: db }).lastSeq, 4);
+  });
+});
+
+// ── §六 3：staleness（她 9/18 拍板的手動型）───────────────────
+
+describe('refineStaleness（工單 20 §A3）', () => {
+  it('無游標 → never', () => {
+    const db = makeDb();
+    seedPaper(db);
+    assert.equal(refineStaleness('p1', { database: db }), 'never');
+  });
+
+  it('精煉完沒動過 → fresh；加新訊息 → new_messages', async () => {
+    const db = makeDb();
+    const { addMsg } = seedPaper(db);
+    const f = fakeGateway();
+    await requestRefine('p1', { database: db, fetchImpl: f, config });
+    assert.equal(refineStaleness('p1', { database: db }), 'fresh');
+
+    addMsg('user', '追問');
+    assert.equal(refineStaleness('p1', { database: db }), 'new_messages');
+  });
+
+  it('改掉 seq<=last_seq 的舊訊息 → stale（只亮提示，系統不自己重跑）', async () => {
+    const db = makeDb();
+    seedPaper(db);
+    const f = fakeGateway();
+    await requestRefine('p1', { database: db, fetchImpl: f, config });
+
+    db.prepare('UPDATE messages SET content = ? WHERE paper_id = ? AND seq = ?')
+      .run('她把第三則改掉了', 'p1', 3);
+    assert.equal(refineStaleness('p1', { database: db }), 'stale');
+    assert.equal(f.calls.length, 1, '偵測到 stale 不會觸發任何外呼');
+  });
+
+  it('既改過舊訊息又有新訊息 → stale 優先（要她重跑全文，不是接著增量）', async () => {
+    const db = makeDb();
+    const { addMsg } = seedPaper(db);
+    const f = fakeGateway();
+    await requestRefine('p1', { database: db, fetchImpl: f, config });
+    db.prepare('UPDATE messages SET content = ? WHERE paper_id = ? AND seq = ?').run('改了', 'p1', 2);
+    addMsg('user', '又問了一句');
+    assert.equal(refineStaleness('p1', { database: db }), 'stale');
+  });
+});
+
+// ── §六 4：full:true 全文重送 ─────────────────────────────────
+
+describe('重新精煉這篇（full:true）', () => {
+  it('sinceSeq=null 蓋掉游標 → body.since_seq=null，游標與指紋一起更新', async () => {
+    const db = makeDb();
+    seedPaper(db);
+    const f = fakeGateway();
+    await requestRefine('p1', { database: db, fetchImpl: f, config });
+
+    db.prepare('UPDATE messages SET content = ? WHERE paper_id = ? AND seq = ?').run('改過的第二則', 'p1', 2);
+    assert.equal(refineStaleness('p1', { database: db }), 'stale');
+
+    // 路由層 full:true ⇒ requestRefine(sinceSeq: null)
+    const r = await requestRefine('p1', { database: db, fetchImpl: f, config, sinceSeq: null });
+    assert.equal(r.ok, true);
+    assert.equal(f.calls[1].body.since_seq, null);
+    assert.equal(f.calls[1].body.transcript.length, 4, '全文重送');
+    assert.equal(refineStaleness('p1', { database: db }), 'fresh', '重跑之後指紋對齊');
   });
 });
 

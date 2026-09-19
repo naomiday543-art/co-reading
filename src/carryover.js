@@ -91,6 +91,20 @@ export function setRefineCursor({ paperId, sessionKey, lastSeq, digest, database
   `).run(paperId, sessionKey, lastSeq, digest, Date.now());
 }
 
+/**
+ * 這一篇相對於上次精煉的狀態（工單 20 §A3，她 9/18 拍板的手動型）。
+ * `stale` 只亮提示，系統絕不自己重跑——要不要重來由她按鈕決定。
+ * @returns {'never'|'fresh'|'stale'|'new_messages'}
+ */
+export function refineStaleness(paperId, { database = db } = {}) {
+  const cursor = getRefineCursor(paperId, { database });
+  if (!cursor) return 'never';
+  if (coveredDigest(paperId, cursor.lastSeq, { database }) !== cursor.coveredDigest) return 'stale';
+  const maxSeq = database.prepare('SELECT MAX(seq) AS m FROM messages WHERE paper_id = ?').get(paperId)?.m ?? null;
+  if (maxSeq != null && maxSeq > cursor.lastSeq) return 'new_messages';
+  return 'fresh';
+}
+
 /** .env 開關（工單 §10，預設值＝右欄） */
 export const carryoverEnv = {
   autoInject: process.env.CARRYOVER_AUTO_INJECT === 'true', // 拍板 #1：預設手動
