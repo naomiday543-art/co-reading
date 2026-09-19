@@ -83,3 +83,74 @@ fixture：3 篇論文（9／9／8 條）＋7 條討論產生、33 條 active cla
 
 ### 驗證
 `npm test` **552 全綠**；`npx vite build --outDir <scratchpad>/dist-wo21-c3` 綠（349 modules，507.77 kB／gzip 156.06 kB），**`dist/` 沒被覆蓋**（mtime 仍是她 16:55 那次）。
+
+---
+
+## 四、Commit ④：逐篇精煉＋ProvenanceModal 抽出
+
+### 改了什麼
+| 檔 | 動作 |
+|---|---|
+| `frontend/src/components/ProvenanceModal.jsx` | **新**。從 `CarryoverPanel.jsx` **原樣**搬出來（一個字沒改），改成 default export |
+| `frontend/src/components/OriginBadge.jsx` | **新**。ProvenanceModal 的相依，順手共用（配色常數住 `lib/claim-visual.js`） |
+| `frontend/src/components/CarryoverPanel.jsx` | **只做這一件事**：`+2 行 import／−97 行`（搬走的三段），面板行為不變 |
+| `frontend/src/pages/Progress.jsx` | ＋逐篇精煉（序列、可停）＋點節點開溯源 |
+
+- **逐篇精煉（§三 B2，不加後端）**：前端拿 `refine_state ∈ {never,new_messages}` 的清單，
+  **序列**呼叫既有 `POST /api/papers/:id/refine`，每篇完成後重拉 B1（圖跟著長）。
+  跑的時候顯示「精煉中 2/3：<title>」＋「停」（按了之後這一篇跑完就不再發下一篇）。
+  `stale` 的**不納入**（她 9/18 拍板手動型），另列提示連到論文頁。
+- **點節點開溯源**：走既有的 `GET /api/papers/:id/claims/:claimId/provenance` 代理，
+  傳該 claim 的第一個 `paper_id`；討論產生的（沒有來源論文）借方向底下第一篇——
+  代理只用 paperId 找 gateway 設定，不影響結果。
+
+---
+
+## 五、總帳
+
+### changed-file list（相對基線 `main` @ `7c34c6f`）
+**新增**：`src/progress.js`、`src/routes/directions.js`、`frontend/src/lib/progressLayout.js`、
+`frontend/src/lib/claim-visual.js`、`frontend/src/pages/Progress.jsx`、
+`frontend/src/components/ProgressGraph.jsx`、`frontend/src/components/ProvenanceModal.jsx`、
+`frontend/src/components/OriginBadge.jsx`、`test/progress-route.test.js`、
+`test/progress-layout.test.js`、`test/fixtures/progress-direction.js`、
+`docs/work/report-21-progress-map-20260919.md`
+
+**修改**：`src/server.js`（＋3 行註冊路由）、`frontend/src/App.jsx`（＋3）、
+`frontend/src/api.js`（＋6）、`frontend/src/components/Sidebar.jsx`（＋11）、
+`frontend/index.html`（＋21，CJK 換行 CSS）、
+`frontend/src/components/CarryoverPanel.jsx`（＋2／−97，只有抽出）、
+`package.json`／`package-lock.json`（d3-hierarchy）
+
+### 沒改什麼（逐條對紅線）
+- **沒動** `src/carryover.js`（只 import `refineStaleness`／`coveredDigest`）、`src/memory.js`、
+  `EXTRACT_PROMPT`、洞察任何檔（`src/routes/insights.js`／`src/insightLinks.js`／`src/insightSource.js`）、
+  `CONSTITUTION`、`src/ai.js`、`src/routes/papers.js`、`src/routes/chat.js`、`src/db.js`（schema 零變動）。
+- **沒有新表、沒有 migration**：B1 不落庫，claims 只在記憶體裡走一趟（紅線 2）。
+- **沒有寫入端點**：`src/routes/directions.js` 只有一個 GET（紅線 1 圖唯讀）。
+- **沒碰** `data/`、沒重啟她的 server、沒改 port、**沒覆蓋 `dist/`**（mtime 仍是 16:55）、
+  沒部署、沒 push、沒 ssh、**沒打過真 gateway**（測試全走注入的假 fetch）。
+- `git add` 逐檔加，沒有 `git add -A`。
+- 只裝 `d3-hierarchy`（ISC），沒裝 React Flow／cytoscape／elkjs／tldraw／mind-elixir。
+
+### 測試與建構
+| 項 | 數字 |
+|---|---|
+| `npm test` 基線 | 507 |
+| ① B1 代理後 | 524（＋17） |
+| ② 佈局引擎後 | 552（＋28） |
+| ③④ 之後 | **552 全綠**（0 fail／0 skip；前端 UI 無元件級測試框架） |
+| `npx vite build --outDir <scratchpad>/dist-wo21-c4` | 綠，349 modules，`index.html` 20.28 kB、`assets/index-*.js` 507.77 kB（gzip 156.06 kB） |
+
+### 已知限制
+1. **真 gateway 從沒打過**（紅線：她的生產）。B1 與整頁只用假 gateway 驗過；真資料第一次進來時看 `data/app.log` 的 `[PROGRESS]` 行。
+2. **沒有瀏覽器親驗**——不打真 gateway 就看不到真圖，且不能碰她正在跑的 server。版面、捲動、縮放、深色模式要她親看（§九「我」那半）。
+3. **節點高度是估的**（16 字／行）：中英混排實際可能差一行；超過 3 行一律截斷，完整句在 `title`。
+4. **「適應視窗」是 CSS `scale()`**：縮小後字跟著小，下限 0.5——再大的圖就得捲。
+5. **「討論（跨篇）」底下沒有再分組**：7 條一字排開；真資料 42% 孤兒掛在論文底下也是一排。
+6. **篩選只淡化、不重排**：點一篇論文其餘淡到 18%，位置不動（重排會讓她失去空間記憶）。
+7. **開關「走過的路」會讓座標重算**：舊節點插回樹裡，不是原地淡入。
+8. **`superseded`／`rc_revisions` 真資料 0 筆**：這條路只在 fixture 上驗過。
+9. **溯源視窗對「討論產生」的 claim 借用方向底下第一篇論文的 id**（代理只用它找設定）。
+10. **逐篇精煉一篇失敗就停**，錯誤顯示在頁面上；已跑完的那幾篇不會回滾（gateway 冪等）。
+11. 前端元件（`Progress.jsx`／`ProgressGraph.jsx`）沒有單元測試——這個 repo 沒有 React 測試框架，靠 `vite build` ＋ 她親驗。

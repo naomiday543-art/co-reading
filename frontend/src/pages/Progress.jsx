@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
-import { directionsApi } from '../api';
+import { directionsApi, papersApi } from '../api';
 import { layoutProgress } from '../lib/progressLayout';
 import ProgressGraph from '../components/ProgressGraph';
+import ProvenanceModal from '../components/ProvenanceModal';
 import { shortPaperTitle } from '../lib/claim-visual';
 
 // 研究進度（工單 21 §六）：一個方向一張圖。
@@ -43,6 +44,10 @@ export default function Progress({ onNavigate }) {
   const [showSuperseded, setShowSuperseded] = useState(false);
   const [paperFilter, setPaperFilter] = useState(null);
   const [fit, setFit] = useState(false);
+  // 逐篇精煉：她按了才跑（紅線 4），序列一篇一篇，中途可停（下一篇不發）。
+  const [refining, setRefining] = useState(null);
+  const stopRef = useRef(false);
+  const [provenance, setProvenance] = useState(null);
   const [viewportWidth, setViewportWidth] = useState(0);
   const viewportRef = useRef(null);
 
@@ -94,6 +99,31 @@ export default function Progress({ onNavigate }) {
   const unrefined = papers.filter(p => p.refine_state === 'never' || p.refine_state === 'new_messages');
   const stalePapers = papers.filter(p => p.refine_state === 'stale');
 
+  /**
+   * 逐篇精煉（§三 B2）：不加後端，前端序列呼叫既有 `POST /api/papers/:id/refine`，
+   * 每篇完成後重拉 B1（圖跟著長出來）。`stale` 的不納入——她 9/18 拍板手動型，
+   * 要重送全文得進論文頁自己按。
+   */
+  const refineAll = async () => {
+    const queue = papers.filter(p => p.refine_state === 'never' || p.refine_state === 'new_messages');
+    if (queue.length === 0 || refining) return;
+    stopRef.current = false;
+    setError('');
+    for (let i = 0; i < queue.length; i++) {
+      if (stopRef.current) break;
+      setRefining({ index: i + 1, total: queue.length, title: queue[i].title, id: queue[i].id });
+      try {
+        await papersApi.refine(queue[i].id);
+      } catch (e) {
+        // 一篇失敗就停：網路不穩的時候連著打只會把上游打得更死。
+        setError(`「${shortPaperTitle(queue[i].title, 16)}」精煉失敗：${e.message}`);
+        break;
+      }
+      await load();
+    }
+    setRefining(null);
+  };
+
   // 「適應視窗」：不做縮放手勢（§六），只有這一顆按鈕，最小 0.5。
   const scale = fit && viewportWidth > 0 && layout.bounds.width > viewportWidth
     ? Math.max(FIT_MIN_SCALE, viewportWidth / layout.bounds.width)
@@ -104,6 +134,19 @@ export default function Progress({ onNavigate }) {
   const downgraded = layout.warnings.filter(w => w.type === 'multi_parent' || w.type === 'cycle').length;
 
   const hasGraph = (data?.claims || []).length > 0;
+
+  // 點節點看溯源。代理只用 paperId 找 gateway 設定，所以傳這條 claim 的第一篇；
+  // 討論產生的（沒有來源論文）就借方向底下任一篇，結果一樣。
+  const openProvenance = (node) => {
+    const claim = node?.data;
+    if (!claim?.id) return;
+    const paperId = (Array.isArray(claim.paper_ids) ? claim.paper_ids : [])[0] || papers[0]?.id || null;
+    if (!paperId) {
+      setError('這個方向底下還沒有論文，開不了溯源');
+      return;
+    }
+    setProvenance({ paperId, claimId: claim.id });
+  };
 
   return (
     <div className="max-w-[1400px] mx-auto">
@@ -157,10 +200,35 @@ export default function Progress({ onNavigate }) {
         </div>
       )}
 
-      {/* 精煉狀態：她按了才跑（紅線 4）。逐篇精煉的按鈕在下一塊接上。 */}
-      {unrefined.length > 0 && (
-        <div className="text-[12.5px] text-hyp mb-2">
-          這個方向還有 {unrefined.length} 篇沒精煉
+      {/* 精煉狀態：她按了才跑（紅線 4），序列一篇一篇，中途可停 */}
+      {(unrefined.length > 0 || refining) && (
+        <div className="flex items-center gap-2 flex-wrap mb-2">
+          {refining ? (
+            <>
+              <span className="text-[12.5px] text-hyp">
+                精煉中 {refining.index}/{refining.total}：{shortPaperTitle(refining.title, 18)}
+                <span className="text-faint">（一篇約 15–40 秒）</span>
+              </span>
+              <button
+                className="text-[12px] px-2 py-0.5 rounded-lg border border-border text-muted hover:text-danger transition-colors"
+                onClick={() => { stopRef.current = true; }}
+                title="這一篇跑完就停，不再發下一篇"
+              >
+                停
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="text-[12.5px] text-hyp">這個方向還有 {unrefined.length} 篇沒精煉</span>
+              <button
+                className="text-[12px] px-2 py-0.5 rounded-lg border border-accent text-accent hover:bg-accent-soft transition-colors"
+                onClick={refineAll}
+                title="一篇一篇送去精煉（每篇約 15–40 秒）。對話改過的那幾篇不納入。"
+              >
+                逐篇精煉
+              </button>
+            </>
+          )}
         </div>
       )}
       {stalePapers.length > 0 && (
@@ -234,11 +302,20 @@ export default function Progress({ onNavigate }) {
                 layout={layout}
                 papers={papers}
                 highlightPaperId={paperFilter}
+                onClaimClick={openProvenance}
               />
             </div>
           </div>
         )}
       </div>
+
+      {provenance && (
+        <ProvenanceModal
+          paperId={provenance.paperId}
+          claimId={provenance.claimId}
+          onClose={() => setProvenance(null)}
+        />
+      )}
     </div>
   );
 }

@@ -108,3 +108,15 @@
 
 ## 十、交付
 四個 commit（B1 後端＋測試／佈局引擎＋測試／頁面＋圖／逐篇精煉＋ProvenanceModal 抽出），報告 `docs/work/report-21-progress-map-20260919.md`（changed-file list、沒改什麼、測試數字、build、fixture 統計、已知限制），偏離寫本檔附錄 A，十行內回覆。commit 結尾 `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`。
+
+---
+
+## 附錄 A：實作偏離（2026-09-19，agent）
+
+1. **§五 的估行 ≤24 字 1 行／≤48 字 2 行 → 改成 16 字／行**。卡寬 220px 扣掉色條與左右 padding 剩約 200px，statement 是 12px，一個中文字就 12px ⇒ 一行只放得下 16 個字。照 24 估會把兩行的句子當成一行，卡片高度不夠、字被 `overflow:hidden` 切掉。估算的用途是排版，排得對才有意義（常數 `CHARS_PER_LINE` 在 `progressLayout.js`，要調一行就好）。
+2. **§六「ORIGIN_BADGE 抽成共用常數」連帶動到 `CarryoverPanel.jsx` 的第二處**：`ProvenanceModal` 依賴 `OriginBadge`，所以配色常數搬到 `frontend/src/lib/claim-visual.js`、`OriginBadge` 成為 `components/OriginBadge.jsx`。`CarryoverPanel.jsx` 的實際 diff 是 **＋2 行 import／−97 行**（純搬移），行為零變動、既有測試零退步。
+3. **§三 B1 的路由做成工廠** `createDirectionsRouter({database, fetchImpl, config})`，`src/routes/directions.js` 的 default export 是 `createDirectionsRouter()`。理由：路由層要能整條走假 gateway（紅線：不打她的生產）。
+4. **逐篇精煉一篇失敗就停**（工單未規定）：網路不穩時連著打只會把上游打更死；錯誤顯示在頁面，已完成的那幾篇不受影響。
+5. **紅線 3 的延伸**：`contradicts` 的另一端被藏起來（superseded 關著）時畫不出線，這種情況記 `warnings` 並在頁面底下用一行小字說出來，不靜靜吞掉。
+6. **頁面多一顆「重新整理」**（工單未列）：B1 不快取，但精煉完、或 gateway 剛好抽風時她需要一個不用換頁的回源入口。
+7. **gateway 姊妹單 9/19 交付說明的四點已吃下**：懸空邊略過＋記 warning、`supersede_reason` 文案寫「原本是：…」、結構父取第一條前先按 `(created_at, id)` 排序、頁頂統計用 `counts`（整線帳）。
