@@ -49,6 +49,7 @@ export default function Progress({ onNavigate }) {
   const stopRef = useRef(false);
   const [provenance, setProvenance] = useState(null);
   const [viewportWidth, setViewportWidth] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
   const viewportRef = useRef(null);
 
   // 預設＝側欄當前選的方向（選到子題就往上找），否則第一個。
@@ -79,10 +80,16 @@ export default function Progress({ onNavigate }) {
   useEffect(() => {
     const el = viewportRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => setViewportWidth(el.clientWidth));
+    // 可見高＝視窗高扣掉畫布頂端到視窗頂端的距離（畫布本身會隨內容長高，clientHeight 不能用）
+    const measure = () => {
+      setViewportWidth(el.clientWidth);
+      setViewportHeight(Math.max(0, window.innerHeight - el.getBoundingClientRect().top - 16));
+    };
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    setViewportWidth(el.clientWidth);
-    return () => ro.disconnect();
+    window.addEventListener('resize', measure);
+    measure();
+    return () => { ro.disconnect(); window.removeEventListener('resize', measure); };
   }, [data]);
 
   const layout = useMemo(() => layoutProgress({
@@ -125,9 +132,10 @@ export default function Progress({ onNavigate }) {
   };
 
   // 「適應視窗」：不做縮放手勢（§六），只有這一顆按鈕，最小 0.5。
-  const scale = fit && viewportWidth > 0 && layout.bounds.width > viewportWidth
-    ? Math.max(FIT_MIN_SCALE, viewportWidth / layout.bounds.width)
-    : 1;
+  // 寬與高都要放得下（這張圖通常是又高又窄），取兩者較小的縮放，最小 0.5。
+  const fitW = viewportWidth > 0 ? viewportWidth / layout.bounds.width : 1;
+  const fitH = viewportHeight > 0 ? viewportHeight / layout.bounds.height : 1;
+  const scale = fit ? Math.max(FIT_MIN_SCALE, Math.min(1, fitW, fitH)) : 1;
 
   const hiddenContradicts = layout.warnings.filter(w => w.type === 'contradicts_hidden').length;
   const danglingEdges = layout.warnings.filter(w => w.type === 'dangling_edge').length;
