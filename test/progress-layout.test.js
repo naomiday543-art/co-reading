@@ -12,6 +12,7 @@ import {
   nodeHeight,
   edgePath,
   nodeIndex,
+  collapsibleIds,
   claimNodeId,
   paperNodeId,
   directionNodeId,
@@ -408,5 +409,172 @@ describe('§九：真資料形狀的假 fixture（3 篇＋討論、33 claims、1
       if (n.id === rootId) continue;
       assert.ok(connected.has(n.id), `${n.id} 沒有結構父`);
     }
+  });
+});
+
+// ── 工單 23：節點展開／收縮 ──────────────────────────────────
+//
+// 收合是**佈局引擎多一個輸入**，不是渲染層自己藏 div——因為她要的是「收起來圖就變小」
+// （bounds 重算、適應視窗才縮得動）。這一組守三件事：① 收起的子樹真的不進圖；
+// ② 矛盾永不因收合而消失（紅線 3）；③ 沒收東西時輸出與工單 21 逐位相同（紅線 2）。
+describe('工單 23 §四：收合', () => {
+  const twoPapers = {
+    direction,
+    papers: [{ id: 'pA', title: '甲' }, { id: 'pB', title: '乙' }],
+    claims: [claim('x1', { paper_ids: ['pA'] }), claim('x2', { paper_ids: ['pB'] })],
+    relations: [rel('r1', 'x2', 'x1', 'contradicts', { note: '兩邊判讀互斥' })],
+  };
+  const collapsedNode = (layout, id) => layout.nodes.find(n => n.id === id);
+
+  it('①收起一篇：該篇的 claims 不在 nodes，收起的卡自己留著並記 hiddenClaims', () => {
+    const layout = layoutProgress({ ...buildFixture(), collapsed: new Set([paperNodeId('pPvc')]) });
+
+    for (const id of ['c10', 'c11', 'c12', 'c13', 'c14', 'c15', 'c16', 'c17', 'c18']) {
+      assert.equal(layout.nodes.some(n => n.id === claimNodeId(id)), false, `${id} 不該還在圖上`);
+    }
+    const card = collapsedNode(layout, paperNodeId('pPvc'));
+    assert.equal(card.collapsed, true);
+    assert.equal(card.hiddenClaims, 9);                       // pPvc 底下 9 條（含孫輩）
+    assert.equal(layout.nodes.length, 38 - 9);
+    assert.equal(layout.treeEdges.length, layout.nodes.length - 1); // 仍是一棵樹
+    // 藏起來的節點不准出現在任何一條樹邊上
+    const alive = new Set(layout.nodes.map(n => n.id));
+    for (const e of layout.treeEdges) {
+      assert.ok(alive.has(e.from) && alive.has(e.to), `${e.from}->${e.to} 指向藏起來的節點`);
+    }
+  });
+
+  it('②一端被藏的矛盾：改接到那張收起的卡，retargeted=true，卡上記 1 條', () => {
+    const layout = layoutProgress({ ...twoPapers, collapsed: new Set([paperNodeId('pB')]) });
+    const edge = layout.overlayEdges.find(e => e.kind === 'contradicts');
+    assert.equal(edge.from, paperNodeId('pB'));    // 原本是 claim:x2
+    assert.equal(edge.to, claimNodeId('x1'));      // 這端沒被藏，照舊
+    assert.equal(edge.retargeted, true);
+    assert.equal(edge.note, '兩邊判讀互斥');        // note 不因改接而掉
+    assert.equal(collapsedNode(layout, paperNodeId('pB')).hiddenOverlays.contradicts, 1);
+    assert.equal(collapsedNode(layout, paperNodeId('pA')).collapsed, undefined); // pA 沒收：不掛任何收合欄位
+  });
+
+  it('③兩端被同一張卡藏住：線不畫，但卡上有計數（矛盾不准憑空消失，紅線 3）', () => {
+    const layout = layoutProgress({
+      direction,
+      papers: [{ id: 'pA', title: '甲' }],
+      claims: [claim('y1', { paper_ids: ['pA'] }), claim('y2', { paper_ids: ['pA'] })],
+      relations: [rel('r1', 'y2', 'y1', 'contradicts')],
+      collapsed: new Set([paperNodeId('pA')]),
+    });
+    assert.equal(layout.overlayEdges.length, 0);
+    const card = collapsedNode(layout, paperNodeId('pA'));
+    assert.equal(card.hiddenOverlays.contradicts, 1); // 一條邊只記一次，不是兩次
+    assert.equal(card.hiddenClaims, 2);
+  });
+
+  it('④兩端被不同卡藏住：畫在兩張收起卡之間，兩張都記 1 條', () => {
+    const layout = layoutProgress({
+      ...twoPapers,
+      collapsed: new Set([paperNodeId('pA'), paperNodeId('pB')]),
+    });
+    const edge = layout.overlayEdges.find(e => e.kind === 'contradicts');
+    assert.equal(edge.from, paperNodeId('pB'));
+    assert.equal(edge.to, paperNodeId('pA'));
+    assert.equal(edge.retargeted, true);
+    assert.equal(collapsedNode(layout, paperNodeId('pA')).hiddenOverlays.contradicts, 1);
+    assert.equal(collapsedNode(layout, paperNodeId('pB')).hiddenOverlays.contradicts, 1);
+  });
+
+  it('⑤收起一條有子節點的 claim：孫輩一起藏，自己留著', () => {
+    const chain = {
+      direction,
+      papers: [{ id: 'pA', title: '甲' }],
+      claims: [
+        claim('z1', { paper_ids: ['pA'] }),
+        claim('z2', { paper_ids: ['pA'] }),
+        claim('z3', { paper_ids: ['pA'] }),
+      ],
+      relations: [rel('r1', 'z2', 'z1', 'supports'), rel('r2', 'z3', 'z2', 'supports')],
+    };
+    const layout = layoutProgress({ ...chain, collapsed: new Set([claimNodeId('z1')]) });
+    assert.ok(collapsedNode(layout, claimNodeId('z1')));
+    assert.equal(layout.nodes.some(n => n.id === claimNodeId('z2')), false);
+    assert.equal(layout.nodes.some(n => n.id === claimNodeId('z3')), false);
+    assert.equal(collapsedNode(layout, claimNodeId('z1')).hiddenClaims, 2);
+
+    // 巢狀：外層收起的卡要含內層的後代（不能因為內層先算過就漏掉）
+    const both = layoutProgress({
+      ...chain,
+      collapsed: new Set([paperNodeId('pA'), claimNodeId('z1')]),
+    });
+    assert.equal(collapsedNode(both, paperNodeId('pA')).hiddenClaims, 3);
+    assert.equal(both.nodes.some(n => n.id === claimNodeId('z1')), false);
+  });
+
+  it('⑥同一對可見端點的多條同種邊併成一條，count 記筆數', () => {
+    const layout = layoutProgress({
+      direction,
+      papers: [{ id: 'pA', title: '甲' }, { id: 'pB', title: '乙' }],
+      claims: [
+        claim('m1', { paper_ids: ['pA'] }), claim('m2', { paper_ids: ['pA'] }),
+        claim('m3', { paper_ids: ['pB'] }), claim('m4', { paper_ids: ['pB'] }),
+      ],
+      relations: [
+        rel('r1', 'm3', 'm1', 'contradicts'),
+        rel('r2', 'm4', 'm2', 'contradicts'),
+      ],
+      collapsed: new Set([paperNodeId('pA'), paperNodeId('pB')]),
+    });
+    assert.equal(layout.overlayEdges.length, 1);
+    assert.equal(layout.overlayEdges[0].count, 2);
+    assert.equal(layout.overlayEdges[0].retargeted, true);
+    assert.equal(collapsedNode(layout, paperNodeId('pA')).hiddenOverlays.contradicts, 2);
+    assert.equal(collapsedNode(layout, paperNodeId('pB')).hiddenOverlays.contradicts, 2);
+  });
+
+  it('⑦零回歸（紅線 2）：空 collapsed／不給／收不到東西 ⇒ 輸出 deepEqual', () => {
+    const fx = buildFixture();
+    const base = layoutProgress(fx);
+    assert.deepEqual(layoutProgress({ ...fx, collapsed: new Set() }), base);
+    assert.deepEqual(layoutProgress({ ...fx, collapsed: [] }), base);
+    // 方向根不可收、不存在的 id、沒有子節點的葉子 ⇒ 全部當作沒收
+    assert.deepEqual(layoutProgress({
+      ...fx,
+      collapsed: new Set([directionNodeId('dirPyGcms'), 'paper:不存在', claimNodeId('c33')]),
+    }), base);
+    assert.deepEqual(layoutProgress({ ...fx, showSuperseded: true, collapsed: new Set() }),
+      layoutProgress({ ...fx, showSuperseded: true }));
+  });
+
+  it('⑧收起來圖就變小：bounds 重算（她要的就是這個）', () => {
+    const fx = buildFixture();
+    const base = layoutProgress(fx);
+    const folded = layoutProgress({
+      ...fx,
+      collapsed: [paperNodeId('pRau'), paperNodeId('pPvc'), paperNodeId('pFlu'), GROUP_NODE_ID],
+    });
+    assert.ok(folded.bounds.height < base.bounds.height, '收起來高度沒變矮');
+    // 方向 1＋研究問題那一串 8（掛在根，不受論文收合影響）＋3 篇＋討論 1 ＝ 13
+    assert.equal(folded.nodes.length, 13);
+    assert.ok(folded.nodes.every(n => n.y + n.h <= folded.bounds.height));
+    assert.ok(folded.nodes.every(n => n.x + n.w <= folded.bounds.width));
+  });
+
+  it('localStorage 存的是陣列 ⇒ 陣列與 Set 效果相同', () => {
+    const fx = buildFixture();
+    assert.deepEqual(
+      layoutProgress({ ...fx, collapsed: [paperNodeId('pPvc')] }),
+      layoutProgress({ ...fx, collapsed: new Set([paperNodeId('pPvc')]) }),
+    );
+  });
+
+  it('collapsibleIds：有子節點的才長三角，方向根不算，收起的卡照樣算', () => {
+    const fx = buildFixture();
+    const open = collapsibleIds(layoutProgress(fx));
+    assert.equal(open.has(directionNodeId('dirPyGcms')), false); // 根不可收
+    assert.ok(open.has(paperNodeId('pPvc')));
+    assert.ok(open.has(GROUP_NODE_ID));
+    assert.ok(open.has(claimNodeId('c1')));                      // 它底下還有 7 條
+    assert.equal(open.has(claimNodeId('c33')), false);           // 葉子沒三角
+
+    const folded = collapsibleIds(layoutProgress({ ...fx, collapsed: [paperNodeId('pPvc')] }));
+    assert.ok(folded.has(paperNodeId('pPvc')), '收起來之後三角要還在（不然展不開）');
   });
 });

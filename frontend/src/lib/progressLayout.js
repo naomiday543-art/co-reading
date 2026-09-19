@@ -93,6 +93,9 @@ function paperIdsOf(claim) {
  * @param {object[]} input.claims gateway 原樣（含 superseded／merged）
  * @param {object[]} input.relations gateway 原樣（整條線，一列一條）
  * @param {boolean} [input.showSuperseded] 「顯示走過的路」開關，預設關（Wikidata 式預設過濾）
+ * @param {Set<string>|string[]} [input.collapsed] 收起來的節點 id（工單 23）。收起的節點自己
+ *   留在圖上（多帶 `collapsed`／`hiddenClaims`／`hiddenOverlays`），後代整棵不進 `nodes`。
+ *   空集合或不給 ⇒ 輸出與工單 21 逐位相同。
  * @returns {{nodes:object[],treeEdges:object[],overlayEdges:object[],warnings:object[],bounds:{width:number,height:number}}}
  */
 export function layoutProgress({
@@ -101,6 +104,7 @@ export function layoutProgress({
   claims = [],
   relations = [],
   showSuperseded = false,
+  collapsed = null,
 } = {}) {
   const warnings = [];
   const warn = (type, message, extra = {}) => warnings.push({ type, message, ...extra });
@@ -173,7 +177,7 @@ export function layoutProgress({
     outgoing.get(r.from_id).push(r);
   }
 
-  const overlayEdges = [];
+  let overlayEdges = [];
   const pushOverlay = (relation, extra = {}) => {
     const fromId = claimNodeId(relation.from_id);
     const toId = claimNodeId(relation.to_id);
@@ -297,10 +301,108 @@ export function layoutProgress({
     });
   }
 
+  // ── 修剪：收起的節點把後代藏起來（工單 23 D1）──────────────
+  //
+  // 位置是刻意的：**結構樹已經建完、座標還沒算**。上面挑結構父／降級多父與成環／
+  // 懸空邊巡查／contradicts 疊圖那幾段規則一個字都沒動——收合只做兩件事：
+  //   ① 把整棵子樹從「要排版的集合」拿掉（bounds 跟著縮，這才是她要的「收起來圖就變小」）；
+  //   ② 把橫線兩端各自換成**最近的可見祖先**——矛盾永不因收合而消失（紅線 3）：
+  //      不是畫到收起的卡上，就是記在那張卡的 `hiddenOverlays` 裡。
+  //
+  // 收起的節點自己留著（她要看得到「這裡還有東西」）；`collapsed` 空、或收的是沒有
+  // 子節點的葉子、或收的是方向根（不可收）⇒ 整段跳過，輸出與工單 21 逐位相同（紅線 2）。
+  const collapsedInput = collapsed instanceof Set ? collapsed : new Set(collapsed || []);
+  const collapsedNodes = new Set(
+    [...collapsedInput].filter(
+      id => id !== rootId && nodes.has(id) && (childrenOf.get(id) || []).length > 0,
+    ),
+  );
+  const hidden = new Set();       // 被藏起來的節點：不進 nodes、不進 treeEdges
+  const collapseMeta = new Map(); // 收起節點 id → { collapsed, hiddenClaims, hiddenOverlays }
+
+  if (collapsedNodes.size > 0) {
+    const descendantsOf = (id) => {
+      const out = [];
+      const seen = new Set();
+      const stack = [...(childrenOf.get(id) || [])];
+      while (stack.length > 0) {
+        const cur = stack.pop();
+        if (seen.has(cur)) continue;
+        seen.add(cur);
+        out.push(cur);
+        stack.push(...(childrenOf.get(cur) || []));
+      }
+      return out;
+    };
+
+    // 每個收起節點各自算自己的後代（不能共用 `hidden`：巢狀收合時外層要含內層的）。
+    for (const id of collapsedNodes) {
+      const meta = {
+        collapsed: true,
+        hiddenClaims: 0,
+        hiddenOverlays: {
+          contradicts: 0, supports: 0, refines: 0, answers: 0,
+          partially_supports: 0, superseded_by: 0,
+        },
+      };
+      for (const d of descendantsOf(id)) {
+        hidden.add(d);
+        if (nodes.get(d)?.kind === 'claim') meta.hiddenClaims += 1;
+      }
+      collapseMeta.set(id, meta);
+    }
+
+    // 沿結構父往上走到第一個沒被藏的（自己沒被藏就是自己）。根永遠可見 ⇒ 一定走得到。
+    const nearestVisible = (id) => {
+      let cur = id;
+      for (let i = 0; cur && i < MAX_DEPTH; i++) {
+        if (!hidden.has(cur)) return cur;
+        cur = parentOf.get(cur);
+      }
+      return null;
+    };
+    const bump = (id, kind) => {
+      const meta = collapseMeta.get(id);
+      if (!meta) return;
+      meta.hiddenOverlays[kind] = (meta.hiddenOverlays[kind] || 0) + 1;
+    };
+
+    const kept = [];
+    const mergedByPair = new Map();
+    for (const e of overlayEdges) {
+      const from = nearestVisible(e.from);
+      const to = nearestVisible(e.to);
+      if (!from || !to) continue; // 走不到可見祖先（理論上不會）——寧可少一條線也不炸
+      const retargeted = from !== e.from || to !== e.to;
+
+      if (retargeted && from === to) {
+        // 兩端被同一張收起卡藏住：畫不出線（自己連自己），只在卡上留計數。一條邊記一次。
+        bump(from, e.kind);
+        continue;
+      }
+      if (from !== e.from) bump(from, e.kind);
+      if (to !== e.to) bump(to, e.kind);
+
+      // 同一對可見端點＋同一種關係的多條邊疊在一起看不出幾條 ⇒ 併成一條，`count` 記筆數。
+      const key = `${from} ${to} ${e.kind}`;
+      const prev = mergedByPair.get(key);
+      if (prev) {
+        prev.count = (prev.count || 1) + 1;
+        continue;
+      }
+      const next = retargeted ? { ...e, from, to, retargeted: true } : { ...e };
+      mergedByPair.set(key, next);
+      kept.push(next);
+    }
+    overlayEdges = kept;
+  }
+
   // ── 第二趟：算座標 ─────────────────────────────────────────
   const buildData = (id, depth = 0) => ({
     id,
-    children: depth > MAX_DEPTH ? [] : (childrenOf.get(id) || []).map(c => buildData(c, depth + 1)),
+    children: (depth > MAX_DEPTH || collapsedNodes.has(id))
+      ? []
+      : (childrenOf.get(id) || []).map(c => buildData(c, depth + 1)),
   });
 
   const root = hierarchy(buildData(rootId));
@@ -328,12 +430,17 @@ export function layoutProgress({
     const y = top + shiftY;
     maxRight = Math.max(maxRight, x + CARD_W);
     maxBottom = Math.max(maxBottom, y + h);
-    return { id: node.id, kind: node.kind, x, y, w: CARD_W, h, data: node.data };
+    const meta = collapseMeta.get(node.id);
+    return { id: node.id, kind: node.kind, x, y, w: CARD_W, h, data: node.data, ...(meta || {}) };
   });
 
   const treeEdges = [];
   for (const [parent, children] of childrenOf.entries()) {
-    for (const child of children) treeEdges.push({ from: parent, to: child });
+    if (hidden.has(parent)) continue;
+    for (const child of children) {
+      if (hidden.has(child)) continue;
+      treeEdges.push({ from: parent, to: child });
+    }
   }
 
   return {
@@ -363,6 +470,26 @@ function short(text = '', max = 16) {
 /** 方便前端查座標：id → 節點。 */
 export function nodeIndex(layout) {
   return new Map((layout?.nodes || []).map(n => [n.id, n]));
+}
+
+/**
+ * 哪些卡片該長出那顆展開／收縮的小三角（工單 23 D1 第 2 點：`結構子節點數 > 0`）。
+ *
+ * 從輸出反推而不是在每個節點上多掛一個 `collapsible` 欄位，是為了守紅線 2：
+ * `collapsed` 空的時候輸出要與工單 21 **逐位相同**，多一個布林欄就不是了。
+ * 展開的節點看 `treeEdges` 有沒有子邊；收起的節點子邊已經被修掉，認 `collapsed` 旗標。
+ * 方向根不可收（D1 第 2 點），所以排除。
+ */
+export function collapsibleIds(layout) {
+  const kindOf = new Map((layout?.nodes || []).map(n => [n.id, n.kind]));
+  const ids = new Set();
+  for (const e of layout?.treeEdges || []) {
+    if (kindOf.get(e.from) !== 'direction') ids.add(e.from);
+  }
+  for (const n of layout?.nodes || []) {
+    if (n.collapsed && n.kind !== 'direction') ids.add(n.id);
+  }
+  return ids;
 }
 
 /**
