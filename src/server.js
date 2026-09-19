@@ -8,6 +8,7 @@ import papersRouter, { reconcileStuckAnalyses } from './routes/papers.js';
 import chatRouter from './routes/chat.js';
 import tagsRouter from './routes/tags.js';
 import treeRouter from './routes/tree.js';
+import directionsRouter from './routes/directions.js';
 import insightsRouter from './routes/insights.js';
 import activityRouter from './routes/activity.js';
 import compareRouter from './routes/compare.js';
@@ -28,6 +29,8 @@ app.use('/api/papers', papersRouter);
 app.use('/api/papers', chatRouter);
 app.use('/api', tagsRouter);
 app.use('/api', treeRouter);
+// 研究進度圖的唯讀代理（工單 21 §三 B1）。掛 /api，路徑是 /directions/:nodeId/progress。
+app.use('/api', directionsRouter);
 app.use('/api', insightsRouter);
 app.use('/api', activityRouter);
 // 對比掛 /api（不是 /api/papers——那裡的 /:id 會把 /compare 吃掉）。工單 09 §3.1。
