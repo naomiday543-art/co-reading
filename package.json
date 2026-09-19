@@ -50,6 +50,7 @@
   "dependencies": {
     "better-sqlite3": "^11.7.0",
     "concurrently": "^9.1.0",
+    "d3-hierarchy": "^3.1.2",
     "dotenv": "^16.4.5",
     "express": "^5.1.0",
     "multer": "^1.4.5-lts.1",

@@ -156,6 +156,17 @@ export default function Sidebar({ onNavigate, onRefresh }) {
         )}
         </div>
 
+        {/* 研究進度（工單 21）：一個方向一張圖，從側欄進 */}
+        <div className="cr-mono text-[10.5px] font-medium tracking-[0.14em] text-faint uppercase px-2 mt-5 mb-2">研究</div>
+        <div
+          className="flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer text-[13.5px] text-text hover:bg-surface-hover transition-colors"
+          onClick={() => onNavigate('progress')}
+          title="這個方向研究到哪了：claims、關係、矛盾、走過的路"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="12" r="2.5" /><circle cx="6" cy="18" r="2.5" /><path d="M8.2 7.2l7.6 3.6M8.2 16.8l7.6-3.6" /></svg>
+          <span className="flex-1">研究進度</span>
+        </div>
+
         {/* Insights section */}
         <div className="cr-mono text-[10.5px] font-medium tracking-[0.14em] text-faint uppercase px-2 mt-5 mb-2">洞察</div>
         <div
