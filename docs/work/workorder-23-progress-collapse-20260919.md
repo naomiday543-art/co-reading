@@ -56,3 +56,16 @@
 
 ## 五、交付
 兩個 commit（D1＋測試／D2+D3+D4），報告 `docs/work/report-23-progress-collapse-20260919.md`（changed-file list、沒改什麼、測試數字、用工單 21 那份 fixture 收起一篇前後的 nodes／edges／bounds 對照），偏離寫本檔附錄 A，十行內回覆。commit 結尾 `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`。
+
+---
+
+## 附錄 A：實作偏離（2026-09-19，agent）
+
+1. **`collapsible` 不做成節點欄位**，改成從輸出反推的 `collapsibleIds(layout)`（展開的看 `treeEdges` 有沒有子邊、收起的認 `collapsed` 旗標、方向根排除）。理由是紅線 2：在每個節點上多掛一個布林欄，`collapsed` 空的時候輸出就不是「與現在 deepEqual」了。這樣改之後可以逐位對帳——已實測與 `cb61701` 的引擎輸出 JSON 完全相同。
+2. **合併橫線的鍵含 `kind`**（§D1 第 3 點只寫「同一對可見端點」）。不同種類的橫線樣式不同（矛盾是紅虛線、支持是綠實線），只按端點併會把它們畫成同一條、丟掉一種顏色。所以是「同一對端點＋同一種關係」才併，`count` 記筆數。
+3. **小三角是 `role="button"` 的 `<span>`，不是 `<button>`**：claim 卡本身就是一顆 `<button>`，按鈕套按鈕是非法的 DOM 巢狀。鍵盤（Enter／空白）照樣可以切換，`stopPropagation` 照工單。
+4. **收起的論文卡是「改顯示」而不是多一行**：`PAPER_H` 是固定的 64px，多一行會被 `overflow:hidden` 切掉。所以收起時把「已精煉／沒精煉」那一行換成「N 條 claims」；「討論（跨篇）」卡更擠（44px），條數放在標籤同一行。
+5. **改接過的邊不重算 `crossPaper`**：沿用原本兩條 claim 的判定。重算的話跨篇的粗線會在收起後變細，而「這兩篇在打架」正是她最在意的訊號。
+6. **收合寫 `localStorage` 不放 `useEffect`**，放在切換的 handler 裡。用 effect 的話切方向的那一拍會拿舊方向的 set 去覆蓋新方向那一格。
+7. **`collapsed` 也吃陣列**（不只 `Set`）：`localStorage` 存回來的就是陣列，少一層轉換就少一個出錯點；測試釘了兩者等價。
+8. **收到不能收的東西一律當沒收**：方向根（D1 第 2 點）、不存在的 id、沒有子節點的葉子——三種都不進修剪，輸出逐位不變。
