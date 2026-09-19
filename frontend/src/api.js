@@ -40,7 +40,9 @@ export const papersApi = {
     request(`/papers/${paperId}/chat/edit`, { method: 'POST', body: { msg_id: msgId, content } }),
   switchBranch: (paperId, forkId, branchId) =>
     request(`/papers/${paperId}/chat/branch/switch`, { method: 'POST', body: { fork_id: forkId, branch_id: branchId } }),
-  refine: (paperId) => request(`/papers/${paperId}/refine`, { method: 'POST' }),
+  // full:true ＝「重新精煉這篇」（工單 20 §A3）：後端送 since_seq=null 全文重送。
+  refine: (paperId, { full = false } = {}) =>
+    request(`/papers/${paperId}/refine`, { method: 'POST', ...(full ? { body: { full: true } } : {}) }),
   getCarryover: (paperId, { refresh = false } = {}) =>
     request(`/papers/${paperId}/carryover${refresh ? '?refresh=1' : ''}`),
   setCarryoverInject: (paperId, enabled) =>

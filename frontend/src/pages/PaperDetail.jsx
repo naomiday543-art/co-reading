@@ -436,18 +436,18 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
 
           {/* Tree assignment */}
           <div className="mt-4">
-            <h3 className="cr-serif text-sm font-semibold text-text-strong mb-2 flex items-center gap-2">分類</h3>
+            <h3 className="cr-serif text-sm font-semibold text-text-strong mb-2 flex items-center gap-2">方向</h3>
             <div className="relative">
               <button
                 className="text-sm border border-border bg-surface rounded-lg px-2.5 py-1 text-muted hover:bg-surface-hover"
                 onClick={() => setTreeMenu(!treeMenu)}
               >
-                {paper.tree_node ? paper.tree_node.name : '未分類'} ▾
+                {paper.tree_node ? paper.tree_node.name : '未掛方向'} ▾
               </button>
               {treeMenu && (
                 <div className="absolute left-0 top-8 bg-surface border border-border rounded-lg shadow-lg z-20 py-1 text-sm max-h-48 overflow-y-auto">
                   <button className="block w-full text-left px-3 py-1.5 hover:bg-surface-hover"
-                    onClick={() => handleMoveToTree(null)}>未分類</button>
+                    onClick={() => handleMoveToTree(null)}>未掛方向</button>
                   {flattenTree(tree).map(n => (
                     <button key={n.id} className="block w-full text-left px-3 py-1.5 hover:bg-surface-hover"
                       style={{ paddingLeft: `${12 + n.depth * 16}px` }}

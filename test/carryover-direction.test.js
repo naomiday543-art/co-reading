@@ -1,8 +1,9 @@
 // 工單 20：方向線——精煉餵進論文所屬的研究方向，而不是單篇。
 // 覆蓋 §六 的六條驗證：鍵解析、每篇游標、staleness、full 全文重送、出海 body、零回歸。
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
+import { readFileSync } from 'node:fs';
 
 import {
   resolveSessionKey,
@@ -353,5 +354,95 @@ describe('renderCarryoverForInjection 跟著解析後那條線走', () => {
       database: db,
     });
     assert.equal(renderCarryoverForInjection('p1', { database: db }), '');
+  });
+});
+
+// ── §六 A4/A5：路由回的欄位 × 面板讀得到的字 ──────────────────
+
+describe('GET /api/papers/:id/carryover 回得出線與狀態（面板靠它決定標頭與提示）', () => {
+  let server, baseUrl, prodDb, setRefineCursorFn, cacheFn;
+
+  before(async () => {
+    ({ default: prodDb } = await import('../src/db.js'));
+    ({ setRefineCursor: setRefineCursorFn, cacheCarryover: cacheFn } = await import('../src/carryover.js'));
+    const { startServer } = await import('../src/server.js');
+    await new Promise((resolve) => {
+      server = startServer(0, '127.0.0.1');
+      server.once('listening', () => {
+        baseUrl = `http://127.0.0.1:${server.address().port}`;
+        resolve();
+      });
+    });
+  });
+
+  after(() => { if (server) server.close(); });
+
+  function seedProd({ paperId, nodeId = null, nodeName = 'nano plastics' }) {
+    if (nodeId) {
+      prodDb.prepare('INSERT OR IGNORE INTO tree_nodes (id, parent_id, name) VALUES (?, ?, ?)')
+        .run(nodeId, null, nodeName);
+    }
+    prodDb.prepare('INSERT INTO papers (id, title, tree_node_id) VALUES (?, ?, ?)')
+      .run(paperId, '路由驗收用', nodeId);
+    for (let i = 1; i <= 4; i++) {
+      prodDb.prepare('INSERT INTO messages (id, paper_id, role, content, seq) VALUES (?, ?, ?, ?, ?)')
+        .run(`${paperId}-m${i}`, paperId, i % 2 ? 'user' : 'assistant', `第 ${i} 則`, i);
+    }
+  }
+
+  it('掛方向 → session_key=topic:、scope=direction、direction 帶名字', async () => {
+    seedProd({ paperId: 'rt_dir', nodeId: 'rt_node_1' });
+    cacheFn({ sessionKey: 'topic:rt_node_1', payload: { hypotheses: [] }, version: 7 });
+    const r = await fetch(`${baseUrl}/api/papers/rt_dir/carryover`).then(x => x.json());
+    assert.equal(r.session_key, 'topic:rt_node_1');
+    assert.equal(r.scope, 'direction');
+    assert.equal(r.direction.name, 'nano plastics');
+    assert.equal(r.refine_state, 'never', '沒有游標＝還沒精煉過');
+  });
+
+  it('沒掛方向 → session_key=paper:、scope=paper、direction 為 null', async () => {
+    seedProd({ paperId: 'rt_solo' });
+    cacheFn({ sessionKey: 'paper:rt_solo', payload: { hypotheses: [] }, version: 1 });
+    const r = await fetch(`${baseUrl}/api/papers/rt_solo/carryover`).then(x => x.json());
+    assert.equal(r.session_key, 'paper:rt_solo');
+    assert.equal(r.scope, 'paper');
+    assert.equal(r.direction, null);
+  });
+
+  it('游標指紋對不上 → refine_state=stale（面板據此亮「重新精煉這篇」）', async () => {
+    seedProd({ paperId: 'rt_stale', nodeId: 'rt_node_2', nodeName: 'py-GCMS' });
+    cacheFn({ sessionKey: 'topic:rt_node_2', payload: { hypotheses: [] }, version: 2 });
+    setRefineCursorFn({ paperId: 'rt_stale', sessionKey: 'topic:rt_node_2', lastSeq: 4, digest: '對不上的舊指紋' });
+    const r = await fetch(`${baseUrl}/api/papers/rt_stale/carryover`).then(x => x.json());
+    assert.equal(r.refine_state, 'stale');
+  });
+});
+
+describe('面板與方向按鈕的字（A4／A5，只改字不搬位置）', () => {
+  const read = (p) => readFileSync(new URL(p, import.meta.url), 'utf-8');
+
+  it('CarryoverPanel：兩種標頭 + stale 提示 + 重新精煉這篇', () => {
+    const src = read('../frontend/src/components/CarryoverPanel.jsx');
+    assert.match(src, /研究續窗 · 方向：\$\{meta\.direction\.name\}/);
+    assert.match(src, /'研究續窗 · 本篇'/);
+    assert.match(src, /⚠ 這篇的對話改過了/);
+    assert.match(src, /重新精煉這篇/);
+    assert.match(src, /handleRefine\(\{ full: true \}\)/);
+    assert.match(src, /refineState === 'stale'/);
+    assert.ok(!/研究續窗 v\$\{/.test(src), '舊的假版本號標籤已換掉');
+  });
+
+  it('api.js：refine 帶得動 full:true', () => {
+    const src = read('../frontend/src/api.js');
+    assert.match(src, /refine: \(paperId, \{ full = false \} = \{\}\)/);
+    assert.match(src, /body: \{ full: true \}/);
+  });
+
+  it('PaperDetail：「分類」改叫「方向」、「未分類」改叫「未掛方向」', () => {
+    const src = read('../frontend/src/pages/PaperDetail.jsx');
+    assert.match(src, />方向<\/h3>/);
+    assert.match(src, /'未掛方向'/);
+    assert.ok(!src.includes('未分類'), '舊字串清乾淨');
+    assert.ok(!/>分類<\/h3>/.test(src), '舊標題清乾淨');
   });
 });
