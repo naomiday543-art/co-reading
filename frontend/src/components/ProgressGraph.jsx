@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { edgePath, nodeIndex } from '../lib/progressLayout';
+import { edgePath, nodeIndex, collapsibleIds } from '../lib/progressLayout';
 import {
   originBarColor, originLabel, claimKindLabel, edgeStyle,
   relationLabel, shortPaperTitle, refineStateLabel,
@@ -21,7 +21,54 @@ function paperIdsOf(node) {
   return [];
 }
 
-function ClaimCard({ node, dimmed, onClick, paperTitleOf }) {
+/**
+ * 展開／收縮的小三角（工單 23 D2）。
+ *
+ * 用 `role="button"` 的 span 而不是 `<button>`：claim 卡本身就是一顆 `<button>`，
+ * 按鈕套按鈕是非法的 DOM 巢狀。點它只切換收合、**不開溯源**（stopPropagation）。
+ */
+function CollapseToggle({ collapsed, count, onToggle }) {
+  const fire = (e) => { e.stopPropagation(); e.preventDefault(); onToggle?.(); };
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      aria-expanded={!collapsed}
+      title={collapsed ? '展開' : `收起這底下的 ${count} 條`}
+      className="absolute right-0.5 bottom-0 px-1 py-0.5 text-[11px] leading-none text-faint hover:text-accent cursor-pointer select-none"
+      onClick={fire}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') fire(e); }}
+    >
+      {collapsed ? '▸' : '▾'}
+    </span>
+  );
+}
+
+/**
+ * 收起的卡右上角那兩顆點：藏著的矛盾是紅點（紅線 3——矛盾不准憑空消失），
+ * 其他種類的橫線合成一顆灰點，數量掛在 `title` 上。
+ */
+function HiddenDots({ hiddenOverlays }) {
+  const contradicts = hiddenOverlays?.contradicts || 0;
+  const others = Object.entries(hiddenOverlays || {}).filter(([kind, n]) => kind !== 'contradicts' && n > 0);
+  if (contradicts === 0 && others.length === 0) return null;
+  return (
+    <span className="absolute right-1 top-1 flex items-center gap-1">
+      {contradicts > 0 && (
+        <span className="rounded-full bg-danger" style={{ width: 6, height: 6 }} title={`藏著 ${contradicts} 條矛盾`} />
+      )}
+      {others.length > 0 && (
+        <span
+          className="rounded-full bg-muted"
+          style={{ width: 6, height: 6 }}
+          title={`藏著 ${others.map(([kind, n]) => `${relationLabel(kind)} ${n} 條`).join('、')}`}
+        />
+      )}
+    </span>
+  );
+}
+
+function ClaimCard({ node, dimmed, onClick, paperTitleOf, collapsible, hiddenBelow, onToggle }) {
   const c = node.data || {};
   const superseded = (c.status ?? 'active') !== 'active';
   const paperId = (Array.isArray(c.paper_ids) ? c.paper_ids : [])[0];
@@ -51,15 +98,24 @@ function ClaimCard({ node, dimmed, onClick, paperTitleOf }) {
       <span className={`cr-node-statement flex-1 pl-3 pr-2 pt-1.5 text-[12px] leading-[20px] text-text ${superseded ? 'line-through' : ''}`}>
         {c.statement || '（沒有內容）'}
       </span>
-      <span className="flex items-center gap-1 pl-3 pr-2 pb-1 shrink-0">
+      <span className={`flex items-center gap-1 pl-3 pb-1 shrink-0 ${collapsible ? 'pr-5' : 'pr-2'}`}>
         <span className="text-[10px] text-faint shrink-0">{claimKindLabel(c.claim_kind)}</span>
         {superseded && <span className="text-[10px] px-1 rounded bg-surface-hover text-muted shrink-0">被取代</span>}
+        {node.collapsed && (
+          <span className="text-[10px] px-1 rounded bg-surface-hover text-muted shrink-0" title={`底下還藏著 ${node.hiddenClaims} 條`}>
+            +{node.hiddenClaims}
+          </span>
+        )}
         {paperId && (
           <span className="text-[10px] px-1 rounded bg-surface-hover text-muted truncate">
             {shortPaperTitle(paperTitleOf(paperId))}
           </span>
         )}
       </span>
+      {node.collapsed && <HiddenDots hiddenOverlays={node.hiddenOverlays} />}
+      {collapsible && (
+        <CollapseToggle collapsed={!!node.collapsed} count={hiddenBelow} onToggle={onToggle} />
+      )}
     </button>
   );
 }
@@ -75,10 +131,37 @@ function PlainCard({ node, dimmed, children, tone = '' }) {
   );
 }
 
-export default function ProgressGraph({ layout, highlightPaperId = null, onClaimClick, papers = [] }) {
+export default function ProgressGraph({
+  layout, highlightPaperId = null, onClaimClick, papers = [], onToggleCollapse,
+}) {
   const index = useMemo(() => nodeIndex(layout), [layout]);
   const paperTitles = useMemo(() => new Map(papers.map(p => [p.id, p.title])), [papers]);
   const paperTitleOf = (id) => paperTitles.get(id) ?? id;
+
+  // 哪些卡有三角（＝有結構子節點，方向根除外）。引擎不在節點上多掛欄位（紅線 2），
+  // 所以從 treeEdges 反推。
+  const collapsible = useMemo(() => collapsibleIds(layout), [layout]);
+
+  // 展開的卡，三角的 title 要說「收起這底下的 N 條」⇒ 這裡數一次還看得見的 claim 後代。
+  const claimsBelow = useMemo(() => {
+    const kids = new Map();
+    for (const e of layout.treeEdges) {
+      if (!kids.has(e.from)) kids.set(e.from, []);
+      kids.get(e.from).push(e.to);
+    }
+    const kindOf = new Map(layout.nodes.map(n => [n.id, n.kind]));
+    const memo = new Map();
+    const walk = (id) => {
+      if (memo.has(id)) return memo.get(id);
+      memo.set(id, 0); // 先佔位：萬一將來有環也不會無限遞迴
+      let n = 0;
+      for (const child of kids.get(id) || []) n += (kindOf.get(child) === 'claim' ? 1 : 0) + walk(child);
+      memo.set(id, n);
+      return n;
+    };
+    for (const n of layout.nodes) walk(n.id);
+    return memo;
+  }, [layout]);
 
   const isDim = (node) => {
     if (!highlightPaperId) return false;
@@ -130,7 +213,7 @@ export default function ProgressGraph({ layout, highlightPaperId = null, onClaim
           if (!from || !to) return null;
           const style = edgeStyle(e.kind, { crossPaper: e.crossPaper });
           const label = [
-            `${relationLabel(e.kind)}${e.crossPaper ? '（跨篇）' : ''}`,
+            `${e.retargeted ? '（接到收起的節點）' : ''}${relationLabel(e.kind)}${e.crossPaper ? '（跨篇）' : ''}${e.count > 1 ? ` ×${e.count}` : ''}`,
             e.kind === 'superseded_by' && e.note ? `原本是：${e.note}` : e.note,
           ].filter(Boolean).join('\n');
           return (
@@ -153,6 +236,16 @@ export default function ProgressGraph({ layout, highlightPaperId = null, onClaim
       {/* 節點層：真 HTML，換行交給瀏覽器（坑②） */}
       {layout.nodes.map((node) => {
         const dimmed = isDim(node);
+        const canFold = collapsible.has(node.id);
+        const toggle = canFold
+          ? (
+            <CollapseToggle
+              collapsed={!!node.collapsed}
+              count={claimsBelow.get(node.id) || 0}
+              onToggle={() => onToggleCollapse?.(node.id)}
+            />
+          )
+          : null;
         if (node.kind === 'claim') {
           return (
             <ClaimCard
@@ -161,6 +254,9 @@ export default function ProgressGraph({ layout, highlightPaperId = null, onClaim
               dimmed={dimmed}
               onClick={onClaimClick}
               paperTitleOf={paperTitleOf}
+              collapsible={canFold}
+              hiddenBelow={claimsBelow.get(node.id) || 0}
+              onToggle={() => onToggleCollapse?.(node.id)}
             />
           );
         }
@@ -178,13 +274,23 @@ export default function ProgressGraph({ layout, highlightPaperId = null, onClaim
               <div className="cr-node-desc text-[12px] font-semibold text-text-strong leading-[18px]" title={node.data?.title}>
                 {node.data?.title || '未命名論文'}
               </div>
-              <div className="text-[10px] text-faint mt-0.5">{refineStateLabel(node.data?.refine_state)}</div>
+              {/* 收起來時這一行改說底下藏了幾條（「改顯示」而不是多一行：卡高是固定的） */}
+              <div className="text-[10px] text-faint mt-0.5">
+                {node.collapsed ? `${node.hiddenClaims} 條 claims` : refineStateLabel(node.data?.refine_state)}
+              </div>
+              {node.collapsed && <HiddenDots hiddenOverlays={node.hiddenOverlays} />}
+              {toggle}
             </PlainCard>
           );
         }
         return (
           <PlainCard key={node.id} node={node} dimmed={false}>
-            <div className="text-[12px] font-medium text-muted">{node.data?.label}</div>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-[12px] font-medium text-muted">{node.data?.label}</span>
+              {node.collapsed && <span className="text-[10px] text-faint">{node.hiddenClaims} 條 claims</span>}
+            </div>
+            {node.collapsed && <HiddenDots hiddenOverlays={node.hiddenOverlays} />}
+            {toggle}
           </PlainCard>
         );
       })}

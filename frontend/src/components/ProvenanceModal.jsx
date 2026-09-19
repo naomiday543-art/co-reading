@@ -17,6 +17,13 @@ export default function ProvenanceModal({ paperId, claimId, onClose }) {
       .catch(e => setError(e.message));
   }, [paperId, claimId]);
 
+  // Escape 關視窗（工單 23 D4）：她親驗時按 Escape 沒反應，只能點背景。卸載要移除監聽。
+  useEffect(() => {
+    const onKeyDown = (e) => { if (e.key === 'Escape') onClose?.(); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
   const c = data?.claim;
   const src = (s) => (
     <li key={s.id} className="text-xs text-muted">
