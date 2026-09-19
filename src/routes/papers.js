@@ -427,17 +427,18 @@ router.get('/:id/carryover', async (req, res) => {
     await fetchCarryover(sessionKey);
   }
   const cached = getCachedCarryover(sessionKey);
-  if (!cached) return res.status(404).json({ error: '尚無 carryover（先按「精煉本次共讀」）' });
+  // 還沒精煉過也回 200：面板要在第一次按之前就知道這篇會餵進哪條線（工單 20 A4）。
+  // carryover=null 表示尚無內容；前端本來就以 carryover 是否存在判斷要不要畫六段。
   res.json({
     ok: true,
     session_key: sessionKey,
     scope,
     direction,
     refine_state: refineStaleness(paper.id),
-    version: cached.version,
-    fetched_at: cached.fetchedAt,
+    version: cached ? cached.version : null,
+    fetched_at: cached ? cached.fetchedAt : null,
     injected: isCarryoverInjected(paper.id),
-    carryover: cached.payload,
+    carryover: cached ? cached.payload : null,
   });
 });
 

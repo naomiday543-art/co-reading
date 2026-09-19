@@ -96,3 +96,9 @@ CREATE TABLE IF NOT EXISTS refine_cursor (
 3. **`requestRefine` 的回傳與 `POST /refine` 的回應多了 `session_key`／`scope`／`direction`。** 工單 A3 只寫 GET 加欄位。多這三欄是**自家 API 的回應**，不是出海 payload（紅線 1 只管出海），面板精煉完才知道自己剛餵進哪條線。前端實際上是精煉後再 `load()` 一次，這三欄目前只作記錄與除錯用。
 4. **`npm run build` 建到暫存目錄驗，沒有覆蓋 `dist/`。** 她的 `npm start`／`npm run dev` 靠 `dist/` 出畫面，覆蓋等於當場換掉她正在看的頁面。build 綠（311 modules），`dist/` mtime 仍是 9/14。**代價：A4／A5 的畫面要等她自己 build。**
 5. **她的 `node --watch` 自己重啟了 12 次，並把 `refine_cursor` 建進了 live DB**（唯讀確認：表在、0 列、`carryover_cache` 原有那列沒動）。我沒有下過重啟命令，也沒有寫過 `data/`；是改 `src/` 觸發她自己的 watch。記在這裡是因為紅線 6 提到那顆 DB。
+
+## 附錄 B：主窗口親驗＋收尾（2026-09-19 傍晚）
+
+- 親跑 `npm test` 507／507；diff 11 檔全在白名單；合入 main `28aa361`；`dist/` 已 build（她跑 `npm run dev`＝vite 熱更新＋`node --watch`，附錄 A 第 4 條對 dist 的假設不成立但無害）。
+- 真上游親驗（gateway 已部署姊妹單）：NIST 篇（瀏覽器按鈕）14.4s／11 claims → Py-GC/MS 篇（API）19s／12 → PE/PVC 篇（API）17s／10、contradicted=1。線 `topic:Tgb-f6jo_0c0C8Sgnf-F0` 共 33 claims／14 關係。**跨篇 contradicts 長出來了**（PE/PVC「作者回覆未充分處理分析特異性」→ Py-GC/MS「未用血漿做基質匹配校準」），總設想 §三假設成立。
+- 收尾修一洞：`GET /api/papers/:id/carryover` 第一次精煉前原本 404，面板拿不到 scope／direction（按鈕 title 與標籤退回單篇字樣）。改回 200＋`carryover:null`，面板在無內容時顯示「→ 方向：X」小字。507／507、build 綠。

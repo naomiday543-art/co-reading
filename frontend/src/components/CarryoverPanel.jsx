@@ -147,7 +147,7 @@ export default function CarryoverPanel({ paperId, messageCount }) {
   const load = useCallback(async () => {
     try {
       const r = await papersApi.getCarryover(paperId);
-      setCarryover(r.carryover);
+      setCarryover(r.carryover ?? null); // 還沒精煉過＝null，但線名／狀態照樣拿得到
       setInjected(r.injected);
       setMeta({ scope: r.scope ?? 'paper', direction: r.direction ?? null, refineState: r.refine_state ?? 'never' });
     } catch {
@@ -225,6 +225,14 @@ export default function CarryoverPanel({ paperId, messageCount }) {
           >
             {expanded ? '收起' : lineLabel}
           </button>
+        )}
+        {!c && meta.scope === 'direction' && meta.direction && (
+          <span
+            className="text-xs text-faint"
+            title="這篇還沒精煉過；按下去會餵進這個方向的研究線（跨論文累積）"
+          >
+            → 方向：{meta.direction.name}
+          </span>
         )}
       </div>
 
