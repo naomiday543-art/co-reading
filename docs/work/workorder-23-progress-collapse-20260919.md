@@ -69,3 +69,12 @@
 6. **收合寫 `localStorage` 不放 `useEffect`**，放在切換的 handler 裡。用 effect 的話切方向的那一拍會拿舊方向的 set 去覆蓋新方向那一格。
 7. **`collapsed` 也吃陣列**（不只 `Set`）：`localStorage` 存回來的就是陣列，少一層轉換就少一個出錯點；測試釘了兩者等價。
 8. **收到不能收的東西一律當沒收**：方向根（D1 第 2 點）、不存在的 id、沒有子節點的葉子——三種都不進修剪，輸出逐位不變。
+
+## 附錄 B：主窗口親驗（2026-09-19 晚）
+
+- 親跑 `npm test` 588／588；diff 只碰前端四檔＋測試＋docs，`src/` 零改動。
+- 她的 dev server 已關，我用 `preview_start co-reading`（vite 5173）驗，驗完停掉。
+- nano plastics「全部收起」：svg 高 2705→1002、25 條 path、收起卡「2／7／9／1／5 條 claims」、紅點「藏著 1 條矛盾」「藏著 3 條矛盾」「藏著 回答 1 條」；localStorage 有 5 個 id；重新整理後仍 1002、4 張收起卡。
+- py-GCMS 收起 PE/PVC 篇：高 2594→1806、卡「8 條 claims」＋紅點「藏著 1 條矛盾」；跨篇矛盾紅虛線 title 變「（接到收起的節點）矛盾（跨篇）…」；另一條矛盾兩端因結構父走 supports 鏈仍可見，照畫（設計如此）。
+- 點卡→溯源→Escape 關閉 ✅。
+- 合入 main、dist 已 build、已 push。
