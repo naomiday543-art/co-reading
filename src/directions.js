@@ -70,14 +70,18 @@ export function listDirections() {
 /**
  * 這篇論文屬於哪個方向：沿 tree_node_id 的 parent_id 往上走到頂層節點。
  * 沒掛節點、節點不存在、論文不存在都回 null。
+ *
+ * 工單 20：多一個 `database` 注入口（預設＝生產那顆），讓 carryover 的鍵解析可以在
+ * 記憶體 DB 上測。既有呼叫點一個字都不用改。
  * @param {string} paperId
+ * @param {{ database?: object }} [opts]
  * @returns {{ id: string, name: string, description: string } | null}
  */
-export function directionOfPaper(paperId) {
-  const paper = db.prepare('SELECT tree_node_id FROM papers WHERE id = ?').get(paperId);
+export function directionOfPaper(paperId, { database = db } = {}) {
+  const paper = database.prepare('SELECT tree_node_id FROM papers WHERE id = ?').get(paperId);
   if (!paper || !paper.tree_node_id) return null;
 
-  const byId = db.prepare('SELECT id, parent_id, name, description FROM tree_nodes WHERE id = ?');
+  const byId = database.prepare('SELECT id, parent_id, name, description FROM tree_nodes WHERE id = ?');
   let node = byId.get(paper.tree_node_id);
   if (!node) return null;
 

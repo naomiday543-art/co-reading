@@ -141,32 +141,43 @@ export default function CarryoverPanel({ paperId, messageCount }) {
   const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState('');
   const [provClaimId, setProvClaimId] = useState(null);
+  // 工單 20：這篇的精煉送進哪條線（方向線／單篇線），以及相對上次精煉的狀態。
+  const [meta, setMeta] = useState({ scope: 'paper', direction: null, refineState: 'never' });
 
   const load = useCallback(async () => {
     try {
       const r = await papersApi.getCarryover(paperId);
       setCarryover(r.carryover);
       setInjected(r.injected);
+      setMeta({ scope: r.scope ?? 'paper', direction: r.direction ?? null, refineState: r.refine_state ?? 'never' });
     } catch {
       setCarryover(null); // 尚未精煉過
+      setMeta({ scope: 'paper', direction: null, refineState: 'never' });
     }
   }, [paperId]);
 
   useEffect(() => { load(); }, [load]);
 
-  const handleRefine = async () => {
+  const handleRefine = async ({ full = false } = {}) => {
     setRefining(true);
     setError('');
     try {
-      const r = await papersApi.refine(paperId);
+      const r = await papersApi.refine(paperId, { full });
       setCarryover(r.carryover);
       setExpanded(true);
+      await load(); // 線／狀態跟著更新（重新精煉之後 stale 提示要消失）
     } catch (e) {
       setError(e.message);
     } finally {
       setRefining(false);
     }
   };
+
+  // 她 9/18 拍板的手動型：只亮提示，系統絕不自己重跑。
+  const stale = meta.refineState === 'stale';
+  const lineLabel = meta.scope === 'direction' && meta.direction
+    ? `研究續窗 · 方向：${meta.direction.name}`
+    : '研究續窗 · 本篇';
 
   const handleToggleInject = async () => {
     try {
@@ -185,9 +196,11 @@ export default function CarryoverPanel({ paperId, messageCount }) {
       <div className="flex items-center gap-2 flex-wrap">
         <button
           className="text-xs text-muted hover:text-accent flex items-center gap-1 px-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          onClick={handleRefine}
+          onClick={() => handleRefine()}
           disabled={refining || (messageCount ?? 0) < 2}
-          title="把本次共讀精煉成結構化研究狀態（研究問題/假設/證據/衝突），存在 research-gateway"
+          title={meta.scope === 'direction' && meta.direction
+            ? `把本次共讀精煉成結構化研究狀態，餵進「${meta.direction.name}」這條研究線（跨論文累積）`
+            : '把本次共讀精煉成結構化研究狀態（研究問題/假設/證據/衝突），存在 research-gateway'}
         >
           {refining ? '… 精煉中（可能需要一分鐘）' : '✦ 精煉本次共讀'}
         </button>
@@ -206,11 +219,29 @@ export default function CarryoverPanel({ paperId, messageCount }) {
           <button
             className="text-xs text-faint hover:text-accent transition-colors"
             onClick={() => setExpanded(!expanded)}
+            title={meta.scope === 'direction'
+              ? '這條線上累積的是整個方向底下所有論文的研究狀態'
+              : '這篇還沒掛到任何方向，續窗只累積這一篇'}
           >
-            {expanded ? '收起' : `研究續窗 v${carryover ? 1 : ''}`}
+            {expanded ? '收起' : lineLabel}
           </button>
         )}
       </div>
+
+      {/* 對話改過了：只提示，不自動重跑（她 9/18 拍板的手動型） */}
+      {stale && (
+        <div className="flex items-center gap-2 flex-wrap mt-1">
+          <span className="text-xs text-danger">⚠ 這篇的對話改過了</span>
+          <button
+            className="text-xs px-1.5 py-0.5 rounded-md border border-danger/40 text-danger hover:bg-danger/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={() => handleRefine({ full: true })}
+            disabled={refining}
+            title="把這篇的對話全文重送一次，改過的地方會走取代流程更新既有結論"
+          >
+            重新精煉這篇
+          </button>
+        </div>
+      )}
       {error && <p className="text-xs text-danger mt-1">{error}</p>}
 
       {/* carryover 卡片：分段顯示，衝突段醒目，每條可點擊溯源 */}

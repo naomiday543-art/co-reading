@@ -16,10 +16,20 @@ import {
 } from '../src/carryover.js';
 
 // In-memory DB：只建 carryover 客戶端碰到的表切片，不碰 data/（紅線 12）
+// 工單 20：多了 papers.tree_node_id／tree_nodes／refine_cursor——鍵解析會走方向查詢。
+// 這個檔案裡的論文一律沒掛方向 ⇒ 全部仍走 `paper:` 單篇線（工單 20 紅線 5 的零回歸線）。
 function makeDb() {
   const db = new Database(':memory:');
   db.exec(`
-    CREATE TABLE papers (id TEXT PRIMARY KEY, title TEXT DEFAULT '');
+    CREATE TABLE papers (id TEXT PRIMARY KEY, title TEXT DEFAULT '', tree_node_id TEXT);
+    CREATE TABLE tree_nodes (
+      id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
+      description TEXT DEFAULT '', sort_order INTEGER DEFAULT 0
+    );
+    CREATE TABLE refine_cursor (
+      paper_id TEXT PRIMARY KEY, session_key TEXT NOT NULL, last_seq INTEGER NOT NULL,
+      covered_digest TEXT NOT NULL, updated_at INTEGER NOT NULL
+    );
     CREATE TABLE messages (
       id TEXT PRIMARY KEY, paper_id TEXT NOT NULL, role TEXT NOT NULL,
       content TEXT NOT NULL, seq INTEGER, created_at INTEGER DEFAULT 0

@@ -8,7 +8,7 @@ import { extractPDFDetailed, inspectPDF, describePages, buildTextMeta, parseText
 import { analyzePaper, resolvePaperFulltextLimit } from '../ai.js';
 import { log } from '../logger.js';
 import { extractInsights } from '../memory.js';
-import { requestRefine, fetchCarryover, fetchClaimProvenance, getCachedCarryover, sessionKeyFor, isCarryoverInjected, setCarryoverInjected } from '../carryover.js';
+import { requestRefine, fetchCarryover, fetchClaimProvenance, getCachedCarryover, resolveSessionKey, refineStaleness, isCarryoverInjected, setCarryoverInjected } from '../carryover.js';
 import { dataPaths } from '../paths.js';
 
 const router = Router();
@@ -398,7 +398,10 @@ router.post('/:id/refine', async (req, res) => {
   const msgCount = db.prepare('SELECT COUNT(*) AS n FROM messages WHERE paper_id = ?').get(paper.id).n;
   if (msgCount < 2) return res.status(400).json({ error: '對話不足 2 條，無法精煉' });
 
-  const sinceSeq = req.body?.since_seq !== undefined ? req.body.since_seq : undefined;
+  // full:true ＝她按「重新精煉這篇」（工單 20 §A3 手動型）：since_seq=null 全文重送。
+  // gateway 的冪等鍵是 transcript 指紋，改過的內容指紋不同會真跑，模型對既有 claims 下 UPDATE／SUPERSEDE。
+  const full = req.body?.full === true;
+  const sinceSeq = full ? null : (req.body?.since_seq !== undefined ? req.body.since_seq : undefined);
   const result = await requestRefine(paper.id, { sinceSeq });
   if (!result.ok) return res.status(502).json({ error: `精煉失敗：${result.reason}` });
   res.json({
@@ -408,6 +411,9 @@ router.post('/:id/refine', async (req, res) => {
     idempotent: result.idempotent,
     stats: result.stats,
     carryover: result.carryover,
+    session_key: result.session_key,
+    scope: result.scope,
+    direction: result.direction,
   });
 });
 
@@ -415,7 +421,7 @@ router.post('/:id/refine', async (req, res) => {
 router.get('/:id/carryover', async (req, res) => {
   const paper = db.prepare('SELECT id FROM papers WHERE id = ?').get(req.params.id);
   if (!paper) return res.status(404).json({ error: '論文不存在' });
-  const sessionKey = sessionKeyFor(paper.id);
+  const { sessionKey, scope, direction } = resolveSessionKey(paper.id);
 
   if (req.query.refresh === '1') {
     await fetchCarryover(sessionKey);
@@ -425,6 +431,9 @@ router.get('/:id/carryover', async (req, res) => {
   res.json({
     ok: true,
     session_key: sessionKey,
+    scope,
+    direction,
+    refine_state: refineStaleness(paper.id),
     version: cached.version,
     fetched_at: cached.fetchedAt,
     injected: isCarryoverInjected(paper.id),
