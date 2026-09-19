@@ -403,7 +403,14 @@ router.post('/:id/refine', async (req, res) => {
   const full = req.body?.full === true;
   const sinceSeq = full ? null : (req.body?.since_seq !== undefined ? req.body.since_seq : undefined);
   const result = await requestRefine(paper.id, { sinceSeq });
-  if (!result.ok) return res.status(502).json({ error: `精煉失敗：${result.reason}` });
+  // 502 不變（前端不看碼）；code／detail 是給她按下「精煉」時看得懂的那句話的出處。
+  if (!result.ok) {
+    return res.status(502).json({
+      error: `精煉失敗：${result.reason}`,
+      code: result.code ?? null,
+      detail: result.detail ?? null,
+    });
+  }
   res.json({
     ok: true,
     run_id: result.run_id,
