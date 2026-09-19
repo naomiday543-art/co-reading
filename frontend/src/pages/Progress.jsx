@@ -29,6 +29,26 @@ function topLevelIdOf(tree, nodeId) {
 
 const FIT_MIN_SCALE = 0.5;
 
+// 收合狀態記在 localStorage，一個方向一格（工單 23 D3）。慣例跟 store.js 一樣：
+// 讀寫都包 try/catch（隱私模式會拋），讀不到就當全展開——這是視圖狀態，不進資料庫。
+const collapseKey = (directionId) => `co-reading:progress-collapsed:${directionId}`;
+
+function readCollapsed(directionId) {
+  if (!directionId) return new Set();
+  try {
+    const raw = localStorage.getItem(collapseKey(directionId));
+    const ids = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(ids) ? ids.filter(id => typeof id === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeCollapsed(directionId, ids) {
+  if (!directionId) return;
+  try { localStorage.setItem(collapseKey(directionId), JSON.stringify([...ids])); } catch {}
+}
+
 export default function Progress({ onNavigate }) {
   const { tree, selectedTreeNode } = useStore();
 
@@ -44,6 +64,8 @@ export default function Progress({ onNavigate }) {
   const [showSuperseded, setShowSuperseded] = useState(false);
   const [paperFilter, setPaperFilter] = useState(null);
   const [fit, setFit] = useState(false);
+  // 收起來的節點（工單 23）：預設全展開，切方向時讀該方向記住的那組。
+  const [collapsed, setCollapsed] = useState(() => new Set());
   // 逐篇精煉：她按了才跑（紅線 4），序列一篇一篇，中途可停（下一篇不發）。
   const [refining, setRefining] = useState(null);
   const stopRef = useRef(false);
@@ -74,6 +96,7 @@ export default function Progress({ onNavigate }) {
 
   useEffect(() => {
     setPaperFilter(null);
+    setCollapsed(readCollapsed(directionId));
     load(directionId);
   }, [directionId]);
 
@@ -98,7 +121,27 @@ export default function Progress({ onNavigate }) {
     claims: data?.claims || [],
     relations: data?.relations || [],
     showSuperseded,
-  }), [data, showSuperseded]);
+    collapsed,
+  }), [data, showSuperseded, collapsed]);
+
+  // 寫 localStorage 只在她真的動了收合時發生（不用 useEffect：切方向的那一拍會拿
+  // 舊的 set 覆蓋新方向的那一格）。
+  const applyCollapsed = (next) => {
+    setCollapsed(next);
+    writeCollapsed(directionId, next);
+  };
+  const toggleCollapse = (nodeId) => {
+    const next = new Set(collapsed);
+    if (next.has(nodeId)) next.delete(nodeId);
+    else next.add(nodeId);
+    applyCollapsed(next);
+  };
+  // 「全部收起」＝所有論文與「討論（跨篇）」（它們永遠是根的直接子，不會被別人藏住）。
+  const collapseAll = () => {
+    const next = new Set(collapsed);
+    for (const n of layout.nodes) if (n.kind === 'paper' || n.kind === 'group') next.add(n.id);
+    applyCollapsed(next);
+  };
 
   const papers = data?.papers || [];
   const counts = data?.counts || null;
@@ -186,6 +229,22 @@ export default function Progress({ onNavigate }) {
             <input type="checkbox" checked={showSuperseded} onChange={e => setShowSuperseded(e.target.checked)} />
             顯示走過的路
           </label>
+          <button
+            className="text-[12px] px-2 py-1 rounded-lg border border-border text-muted hover:text-accent transition-colors disabled:opacity-50"
+            onClick={collapseAll}
+            disabled={!hasGraph}
+            title="把每一篇論文與「討論（跨篇）」都收起來，只留方向這一層"
+          >
+            全部收起
+          </button>
+          <button
+            className="text-[12px] px-2 py-1 rounded-lg border border-border text-muted hover:text-accent transition-colors disabled:opacity-50"
+            onClick={() => applyCollapsed(new Set())}
+            disabled={collapsed.size === 0}
+            title="全部展開"
+          >
+            全部展開
+          </button>
           <button
             className={`text-[12px] px-2 py-1 rounded-lg border transition-colors ${fit ? 'border-accent text-accent' : 'border-border text-muted hover:text-accent'}`}
             onClick={() => setFit(f => !f)}
@@ -328,6 +387,7 @@ export default function Progress({ onNavigate }) {
                 papers={papers}
                 highlightPaperId={paperFilter}
                 onClaimClick={openProvenance}
+                onToggleCollapse={toggleCollapse}
               />
             </div>
           </div>
