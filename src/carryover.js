@@ -176,11 +176,56 @@ export function setCarryoverInjected(paperId, enabled, { database = db } = {}) {
   return enabled;
 }
 
+// ── 失敗文案（工單 22）────────────────────────────────────────
+//
+// gateway 失敗回 `{ error: { type, message, code, detail } }`（姊妹單 E2）。
+// `code` 是穩定的機器碼；這張表把它翻成她看得懂的一句話——她按下「精煉」看到的
+// 永遠是同一句「http 502」時，分不出沒錢／key 壞／模型下架／逾時（9/19 實錄）。
+// 舊 gateway 沒有 `code` ⇒ 退回現況 `http <status>`，不假裝知道原因。
+const REFINE_FAILURE_COPY = {
+  provider_payment: '上游拒絕：帳戶餘額不足（去充值或換供應商）',
+  provider_auth: '上游拒絕：金鑰無效或過期',
+  provider_not_found: '上游找不到這個模型（檢查 REFINE_MODEL）',
+  provider_missing_session: '上游缺 session 標頭（gateway 版本太舊）',
+  provider_bad_request: '上游拒絕這個請求（參數或格式）',
+  provider_rate_limited: '上游限流，等一下再按',
+  provider_server_error: '上游暫時故障，等一下再按',
+  provider_unreachable: '連不上上游（VPS 到供應商的網路）',
+  provider_empty: '模型這次沒給合格的答案，再按一次通常就好',
+  provider_invalid_stream: '模型這次沒給合格的答案，再按一次通常就好',
+  output_parse: '模型這次沒給合格的答案，再按一次通常就好',
+  output_schema: '模型這次沒給合格的答案，再按一次通常就好',
+  timeout: '精煉逾時（對話太長或上游太慢），再按一次',
+  config: 'gateway 沒設定精煉模型',
+  input: '沒有新對話可精煉',
+};
+
+/**
+ * 把 gateway 的失敗回應翻成一句中文。純函數，不外呼、不寫庫、不 log。
+ * 表上沒有的 code（例如 `internal`）一律退回 `http <status>`——寧可誠實說不知道，
+ * 也不要編一句安撫的話；`code` 仍原樣回去，日誌與回應裡看得到真碼。
+ * @param {{ status?: number|string, body?: object }} args
+ * @returns {{ reason: string, code: string|null, detail: string|null }}
+ */
+export function describeRefineFailure({ status, body } = {}) {
+  const err = (body && typeof body === 'object' && body.error && typeof body.error === 'object')
+    ? body.error
+    : {};
+  const code = typeof err.code === 'string' && err.code ? err.code : null;
+  const detail = typeof err.detail === 'string' && err.detail ? err.detail : null;
+  const type = typeof err.type === 'string' && err.type ? err.type : null;
+
+  const copy = code ? REFINE_FAILURE_COPY[code] : null;
+  const fallback = `http ${status ?? 'error'}${type ? `（${type}）` : ''}`;
+  return { reason: copy || fallback, code, detail };
+}
+
 // ── 外呼 ───────────────────────────────────────────────────────
 
 /**
  * 觸發精煉。無新訊息（≤ last_seq）→ 本地冪等短路，零外呼。
- * @returns {Promise<{ok:boolean, reason?:string, run_id?:string, version?:number, idempotent?:boolean, stats?:object, carryover?:object}>}
+ * 失敗時 `reason` 是給她看的一句話（工單 22），`code`／`detail` 是機器碼與 gateway 的安全短句。
+ * @returns {Promise<{ok:boolean, reason?:string, code?:string|null, detail?:string|null, run_id?:string, version?:number, idempotent?:boolean, stats?:object, carryover?:object}>}
  */
 export async function requestRefine(paperId, { sinceSeq = undefined, database = db, fetchImpl = fetch, config = getGatewayConfig() } = {}) {
   if (!config || !config.url) return { ok: false, reason: 'gateway not configured' };
@@ -219,9 +264,13 @@ export async function requestRefine(paperId, { sinceSeq = undefined, database = 
       signal: AbortSignal.timeout(REFINE_TIMEOUT_MS),
     });
     if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      log('WARN', `精煉失敗 ${paperId}: HTTP ${res.status} ${text.slice(0, 160)}`);
-      return { ok: false, reason: `http ${res.status}` };
+      // body 原文不進日誌（可能夾著上游回的原始訊息）；只留機器碼與 gateway 自己
+      // 挑過的安全短句（姊妹單 E2 釘死 detail 的形狀）。
+      let payload = {};
+      try { payload = (await res.json()) ?? {}; } catch { payload = {}; }
+      const { reason, code, detail } = describeRefineFailure({ status: res.status, body: payload });
+      log('WARN', `精煉失敗 ${paperId}: HTTP ${res.status} code=${code ?? '-'} detail=${detail ?? '-'}`);
+      return { ok: false, reason, code, detail };
     }
     const data = await res.json();
     cacheCarryover({

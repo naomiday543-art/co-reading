@@ -45,3 +45,9 @@
 
 ## 五、交付
 一個 commit＋報告 `docs/work/report-22-refine-error-copy-20260919.md`；偏離寫附錄 A；十行內回覆。commit 結尾 `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`。
+
+## 附錄 A：實作時的偏離／補洞（2026-09-19）
+
+1. **表上沒有的 `code`**（§二 C1 對照表沒列，但姊妹單 E1 有 `internal`）：照「沒有 code」那格處理——`http <status>`，`error.type` 有值就加括號；但 `code` 原樣回進回應與日誌。不為未知碼編文案。
+2. **回應不是 JSON**（上游回 HTML／空 body，`res.json()` 會拋）：當 `{}` 處理，退回 `http <status>`。工單沒寫這格，但改讀 `json()` 後它是新的失敗面。
+3. `requestRefine` 的 `@returns` jsdoc 補上 `code`／`detail`（工單只寫了分支行為）。
