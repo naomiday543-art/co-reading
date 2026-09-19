@@ -8,7 +8,7 @@ import { extractPDFDetailed, inspectPDF, describePages, buildTextMeta, parseText
 import { analyzePaper, resolvePaperFulltextLimit } from '../ai.js';
 import { log } from '../logger.js';
 import { extractInsights } from '../memory.js';
-import { requestRefine, fetchCarryover, fetchClaimProvenance, getCachedCarryover, sessionKeyFor, isCarryoverInjected, setCarryoverInjected } from '../carryover.js';
+import { requestRefine, fetchCarryover, fetchClaimProvenance, getCachedCarryover, resolveSessionKey, isCarryoverInjected, setCarryoverInjected } from '../carryover.js';
 import { dataPaths } from '../paths.js';
 
 const router = Router();
@@ -408,6 +408,9 @@ router.post('/:id/refine', async (req, res) => {
     idempotent: result.idempotent,
     stats: result.stats,
     carryover: result.carryover,
+    session_key: result.session_key,
+    scope: result.scope,
+    direction: result.direction,
   });
 });
 
@@ -415,7 +418,7 @@ router.post('/:id/refine', async (req, res) => {
 router.get('/:id/carryover', async (req, res) => {
   const paper = db.prepare('SELECT id FROM papers WHERE id = ?').get(req.params.id);
   if (!paper) return res.status(404).json({ error: '論文不存在' });
-  const sessionKey = sessionKeyFor(paper.id);
+  const { sessionKey, scope, direction } = resolveSessionKey(paper.id);
 
   if (req.query.refresh === '1') {
     await fetchCarryover(sessionKey);
@@ -425,6 +428,8 @@ router.get('/:id/carryover', async (req, res) => {
   res.json({
     ok: true,
     session_key: sessionKey,
+    scope,
+    direction,
     version: cached.version,
     fetched_at: cached.fetchedAt,
     injected: isCarryoverInjected(paper.id),

@@ -280,6 +280,20 @@ db.exec(`
   );
 `);
 
+// ── 每篇論文一個精煉游標（工單 20 §A2）───────────────────────────
+// carryover_cache 以 session_key 為鍵，方向線上十篇論文共用一列，記不住「這一篇精煉到第幾則」。
+// 游標因此另立一表、每篇一列：session_key 記下那次送去的是哪條線（線換了就全文重送），
+// covered_digest 是 seq<=last_seq 那段對話的指紋，用來認出「她把舊訊息改過了」（手動型提示，不自動重跑）。
+db.exec(`
+  CREATE TABLE IF NOT EXISTS refine_cursor (
+    paper_id       TEXT PRIMARY KEY REFERENCES papers(id) ON DELETE CASCADE,
+    session_key    TEXT NOT NULL,
+    last_seq       INTEGER NOT NULL,
+    covered_digest TEXT NOT NULL,
+    updated_at     INTEGER NOT NULL
+  );
+`);
+
 export function getSetting(key) {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
   return row ? row.value : null;

@@ -7,16 +7,88 @@
 // 拍板 #1/#3（2026-08-29）：注入=手動（按「帶上」才注入）；不做定時自動 refine。
 // carryover_cache 是只讀快取，不是第二個記憶系統——gateway 是唯一事實源。
 
+import { createHash } from 'node:crypto';
+
 import db from './db.js';
 import { getSetting } from './db.js';
+import { directionOfPaper } from './directions.js';
 import { getGatewayConfig } from './gateway.js';
 import { log } from './logger.js';
 
 const REFINE_TIMEOUT_MS = 200000; // gateway 內部 run 上限 180s，客戶端留餘裕
 const FETCH_TIMEOUT_MS = 15000;
 
+// gateway 契約的 session_key 正則是 `^(paper|topic):[A-Za-z0-9_-]+$`。
+// 節點 id 是 nanoid，字元集剛好在裡面；萬一有人手塞了別的 id，退回單篇線而不是送出去被 422。
+const KEY_SUFFIX_RE = /^[A-Za-z0-9_-]+$/;
+
 export function sessionKeyFor(paperId) {
   return `paper:${paperId}`;
+}
+
+/**
+ * 這一篇的精煉要送進哪條線（工單 20 §A1）。
+ * 掛在方向底下（含子節點，沿 parent_id 走到頂層）→ 方向線 `topic:<節點 id>`；
+ * 沒掛／查不到／id 不合契約 → 照舊單篇線 `paper:<id>`。
+ * @returns {{ sessionKey: string, scope: 'direction'|'paper', direction: {id:string,name:string}|null }}
+ */
+export function resolveSessionKey(paperId, { database = db } = {}) {
+  const fallback = { sessionKey: sessionKeyFor(paperId), scope: 'paper', direction: null };
+  let direction = null;
+  try {
+    direction = directionOfPaper(paperId, { database });
+  } catch (e) {
+    // 方向查詢壞掉絕不能讓精煉掛掉——退回單篇線，行為與方向線出現以前一樣。
+    log('WARN', `[CARRYOVER] 方向查詢失敗，退回單篇線: ${e.message}`);
+    return fallback;
+  }
+  if (!direction) return fallback;
+  if (!KEY_SUFFIX_RE.test(direction.id)) {
+    log('WARN', '[CARRYOVER] direction id 不合契約，退回單篇線');
+    return fallback;
+  }
+  return {
+    sessionKey: `topic:${direction.id}`,
+    scope: 'direction',
+    direction: { id: direction.id, name: direction.name },
+  };
+}
+
+// ── 每篇一個游標（工單 20 §A2/§A3）─────────────────────────────
+
+/** seq<=lastSeq 那段對話的指紋；lastSeq 為 null 回空字串。 */
+export function coveredDigest(paperId, lastSeq, { database = db } = {}) {
+  if (lastSeq == null) return '';
+  const rows = database
+    .prepare('SELECT seq, role, content FROM messages WHERE paper_id = ? AND seq <= ? ORDER BY seq ASC')
+    .all(paperId, lastSeq);
+  const h = createHash('sha256');
+  for (const m of rows) h.update(`${m.seq}|${m.role}|${m.content}\n`);
+  return h.digest('hex');
+}
+
+export function getRefineCursor(paperId, { database = db } = {}) {
+  const row = database.prepare('SELECT * FROM refine_cursor WHERE paper_id = ?').get(paperId);
+  if (!row) return null;
+  return {
+    paperId: row.paper_id,
+    sessionKey: row.session_key,
+    lastSeq: row.last_seq,
+    coveredDigest: row.covered_digest,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function setRefineCursor({ paperId, sessionKey, lastSeq, digest, database = db }) {
+  database.prepare(`
+    INSERT INTO refine_cursor (paper_id, session_key, last_seq, covered_digest, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(paper_id) DO UPDATE SET
+      session_key = excluded.session_key,
+      last_seq = excluded.last_seq,
+      covered_digest = excluded.covered_digest,
+      updated_at = excluded.updated_at
+  `).run(paperId, sessionKey, lastSeq, digest, Date.now());
 }
 
 /** .env 開關（工單 §10，預設值＝右欄） */
@@ -27,8 +99,12 @@ export const carryoverEnv = {
 
 // ── 請求組裝（純函數，供測試）──────────────────────────────────
 
-/** 由本地 messages/insights 組出契約 §九 的 refine body。 */
+/**
+ * 由本地 messages/insights 組出契約 §九 的 refine body。
+ * 六個欄位一個不多（工單 20 紅線 1）：方向線只是換 `session_key`，payload 形狀不動。
+ */
 export function buildRefineRequest(paperId, { sinceSeq = null, database = db } = {}) {
+  const resolved = resolveSessionKey(paperId, { database });
   const paper = database.prepare('SELECT id, title FROM papers WHERE id = ?').get(paperId);
   const transcript = database
     .prepare('SELECT seq, role, content FROM messages WHERE paper_id = ? ORDER BY seq ASC')
@@ -40,9 +116,10 @@ export function buildRefineRequest(paperId, { sinceSeq = null, database = db } =
   return {
     paper,
     transcript,
+    resolved,
     body: {
       source: 'co-reading',
-      session_key: sessionKeyFor(paperId),
+      session_key: resolved.sessionKey,
       paper_id: paperId,
       paper_title: paper?.title ?? '',
       transcript,
@@ -93,17 +170,27 @@ export function setCarryoverInjected(paperId, enabled, { database = db } = {}) {
  */
 export async function requestRefine(paperId, { sinceSeq = undefined, database = db, fetchImpl = fetch, config = getGatewayConfig() } = {}) {
   if (!config || !config.url) return { ok: false, reason: 'gateway not configured' };
-  const sessionKey = sessionKeyFor(paperId);
+  const { sessionKey, scope, direction } = resolveSessionKey(paperId, { database });
+
+  // 游標是 per-paper 的；線換了（例如她剛把這篇掛上方向）就 since_seq=null 全文重送，
+  // 否則新線上會缺前半段對話。gateway 靠 transcript 指紋冪等，重送不會重算。
+  const cursor = getRefineCursor(paperId, { database });
+  const cursorSince = cursor && cursor.sessionKey === sessionKey ? cursor.lastSeq : null;
 
   const { transcript, body } = buildRefineRequest(paperId, {
-    sinceSeq: sinceSeq === undefined ? getCachedCarryover(sessionKey, { database })?.lastSeq ?? null : sinceSeq,
+    sinceSeq: sinceSeq === undefined ? cursorSince : sinceSeq,
     database,
   });
 
   const maxSeq = transcript.length > 0 ? Math.max(...transcript.map(m => m.seq ?? 0)) : null;
   if (body.since_seq != null && (maxSeq == null || maxSeq <= body.since_seq)) {
     const cached = getCachedCarryover(sessionKey, { database });
-    if (cached) return { ok: true, idempotent: true, version: cached.version, carryover: cached.payload, reason: 'no new messages' };
+    if (cached) {
+      return {
+        ok: true, idempotent: true, version: cached.version, carryover: cached.payload,
+        reason: 'no new messages', session_key: sessionKey, scope, direction,
+      };
+    }
     return { ok: false, reason: 'no new messages and nothing cached' };
   }
 
@@ -130,7 +217,16 @@ export async function requestRefine(paperId, { sinceSeq = undefined, database = 
       lastSeq: maxSeq,
       database,
     });
-    log('INFO', `精煉完成 ${paperId} → run ${data.run_id}（idempotent=${data.idempotent}，claims 統計 ${JSON.stringify(data.stats)}）`);
+    if (maxSeq != null) {
+      setRefineCursor({
+        paperId,
+        sessionKey,
+        lastSeq: maxSeq,
+        digest: coveredDigest(paperId, maxSeq, { database }),
+        database,
+      });
+    }
+    log('INFO', `精煉完成 ${paperId} → run ${data.run_id}（線 ${sessionKey}${direction ? `／方向「${direction.name}」` : ''}，idempotent=${data.idempotent}，claims 統計 ${JSON.stringify(data.stats)}）`);
     return {
       ok: true,
       run_id: data.run_id,
@@ -138,6 +234,9 @@ export async function requestRefine(paperId, { sinceSeq = undefined, database = 
       idempotent: data.idempotent,
       stats: data.stats,
       carryover: data.carryover,
+      session_key: sessionKey,
+      scope,
+      direction,
     };
   } catch (e) {
     log('WARN', `精煉異常 ${paperId}: ${e.message}`);
@@ -228,6 +327,8 @@ export function renderCarryoverForPrompt(carryover, { maxPerSection = 6 } = {}) 
 /** chatAboutPaper 注入入口：per-paper「帶上」開關 + 本地快取。 */
 export function renderCarryoverForInjection(paperId, { database = db } = {}) {
   if (!isCarryoverInjected(paperId, { database })) return '';
-  const cached = getCachedCarryover(sessionKeyFor(paperId), { database });
+  // 「帶上」仍是 per-paper 開關；注入的是這篇解析後那條線的 payload（方向線＝方向級內容）。
+  const { sessionKey } = resolveSessionKey(paperId, { database });
+  const cached = getCachedCarryover(sessionKey, { database });
   return renderCarryoverForPrompt(cached?.payload);
 }
