@@ -19,6 +19,12 @@ import {
 // quote 的偏移語義綁死在 papers.full_text 上，SI 的字不在那條座標軸上）。
 const MODE_KEY = 'co-reading:fulltext-mode';
 
+// PDF 框的最小高度（工單 25）。原本寫死 600px：視窗矮、或瀏覽器縮放調大時，iframe 比
+// 可用高度還高，底部連同 PDF 檢視器自己的**水平捲軸**一起被擠到外層捲動區下面——
+// 她把 PDF 放大到 163% 之後就「沒有左右滑塊、只能用觸控板」。現在只保一個不至於塌掉的
+// 下限，其餘交給 flex-1 貼合可用高度，檢視器的兩條捲軸就都留在看得到的地方。
+const PDF_FRAME_MIN_HEIGHT = 240;
+
 function loadMode() {
   try {
     return localStorage.getItem(MODE_KEY) === 'text' ? 'text' : 'pdf';
@@ -431,7 +437,7 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
               src={attachmentsApi.fileUrl(paper.id, selected.id)}
               className="flex-1 w-full border border-border rounded-lg bg-surface"
               title={selected.label}
-              style={{ minHeight: '600px' }}
+              style={{ minHeight: PDF_FRAME_MIN_HEIGHT }}
             />
             <p className="text-xs text-faint mt-2 text-center">
               {selected.has_text
@@ -463,7 +469,7 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
           src={`/api/papers/${paper.id}/pdf`}
           className="flex-1 w-full border border-border rounded-lg bg-surface"
           title="論文原文"
-          style={{ minHeight: '600px' }}
+          style={{ minHeight: PDF_FRAME_MIN_HEIGHT }}
         />
         <p className="text-xs text-faint mt-2 text-center">
           {hasText
