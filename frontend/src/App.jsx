@@ -174,8 +174,10 @@ export default function App() {
       </div>
 
       {/* Upload zone - always visible in library */}
+      {/* 工單 25：論文庫是主要的上傳場景，靶要大；其他頁面（論文詳情／對比／進度圖／洞察）
+          用細條版，把高度還給內容。 */}
       {page !== 'settings' && !uploading && !detailReading && (
-        <UploadZone onUploaded={loadData} />
+        <UploadZone onUploaded={loadData} compact={page !== 'library'} />
       )}
 
       {/* Mobile bottom tab bar (<=767px, mirrors header nav) */}
