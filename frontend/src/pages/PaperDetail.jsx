@@ -34,6 +34,9 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
   const [statusMenu, setStatusMenu] = useState(false);
   // 工單 24 §D4：補充文件清單。撈在這一層，「原文」tab 的標籤才知道有幾份。
   const [attachments, setAttachments] = useState([]);
+  // 工單 24b：分頁列右側的插槽（DOM node）。用 state 存、不用 useRef——節點就位要觸發重渲染，
+  // FullTextView 才拿得到它去 createPortal。
+  const [controlsSlot, setControlsSlot] = useState(null);
   const [tagInput, setTagInput] = useState('');
   const [tagSuggestions, setTagSuggestions] = useState([]);
   const [showTagSuggest, setShowTagSuggest] = useState(false);
@@ -343,21 +346,30 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
         {/* Left: Summary / Fulltext tabs */}
         <div className="cr-detail-pane flex flex-col overflow-hidden" style={{ width: readingMode ? '100%' : `${split}%` }}>
           {/* Tab bar */}
-          <div className="flex border-b border-border-soft mb-3 shrink-0">
+          <div className="flex flex-wrap-reverse items-end border-b border-border-soft mb-3 shrink-0">
             <button
-              className={`text-[13px] px-3 py-2 border-b-2 -mb-px transition-colors ${leftTab === 'summary' ? 'border-accent text-accent font-medium' : 'border-transparent text-muted hover:text-text-strong'}`}
+              className={`text-[13px] px-3 py-2 border-b-2 -mb-px transition-colors whitespace-nowrap shrink-0 ${leftTab === 'summary' ? 'border-accent text-accent font-medium' : 'border-transparent text-muted hover:text-text-strong'}`}
               onClick={() => setLeftTab('summary')}
             >
               AI 摘要
             </button>
             <button
-              className={`text-[13px] px-3 py-2 border-b-2 -mb-px transition-colors ${leftTab === 'fulltext' ? 'border-accent text-accent font-medium' : 'border-transparent text-muted hover:text-text-strong'}`}
+              className={`text-[13px] px-3 py-2 border-b-2 -mb-px transition-colors whitespace-nowrap shrink-0 ${leftTab === 'fulltext' ? 'border-accent text-accent font-medium' : 'border-transparent text-muted hover:text-text-strong'}`}
               onClick={() => setLeftTab('fulltext')}
             >
               原文{attachments.length > 0 && (
                 <span className="text-[11px] text-faint ml-1">· SI {attachments.length}</span>
               )}
             </button>
+            {/* 工單 24b：原文分頁的「正文｜SI…｜＋」與「PDF 原檔｜文字版」收在這一行右側
+                （FullTextView 用 portal 畫進來）——她嫌那兩排佔地方，要把高度還給 PDF。
+                摘要分頁時這格是空的。pr-4 對齊下面內容區的右內距。
+                左欄被拖得很窄、一行放不下時：分頁列用 wrap-reverse，這格**整塊**換到上面一行，
+                兩顆分頁仍留在底行貼著底線（不會被擠成三行）。 */}
+            <div
+              ref={setControlsSlot}
+              className="ml-auto flex items-center flex-wrap justify-end gap-1.5 min-w-0 max-w-full pl-2 pr-4 py-1"
+            />
           </div>
 
           <div className="overflow-y-auto pr-4 flex-1">
@@ -519,6 +531,7 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
               paper={paper}
               attachments={attachments}
               onAttachmentsChange={setAttachments}
+              controlsSlot={controlsSlot}
             />
           )}
           </div>

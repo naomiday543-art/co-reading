@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useStore } from '../store';
 import { attachmentsApi } from '../api';
 import {
@@ -196,6 +197,8 @@ function AttachmentToolbar({ item, onPatch, onDelete, busy }) {
 
   return (
     <div className="flex items-center flex-wrap gap-x-3 gap-y-1 justify-center mb-2 text-[11.5px] text-muted shrink-0">
+      {/* 工單 24b：chip 上只剩「SI N」，這份叫什麼名字寫在這裡 */}
+      <span className="text-text-strong font-medium truncate max-w-[16rem]" title={item.original_name}>{item.label}</span>
       <span className="text-faint">{item.chars.toLocaleString('en-US')} 字</span>
 
       <label className="flex items-center gap-1 cursor-pointer">
@@ -242,7 +245,7 @@ function AttachmentToolbar({ item, onPatch, onDelete, busy }) {
   );
 }
 
-export default function FullTextView({ paper, attachments = [], onAttachmentsChange }) {
+export default function FullTextView({ paper, attachments = [], onAttachmentsChange, controlsSlot = null }) {
   const hasPdf = !!paper.pdf_filename;
   const hasText = !!paper.full_text;
   const [mode, setMode] = useState(() => (hasPdf ? loadMode() : 'text'));
@@ -349,47 +352,66 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
         }}
       />
       <button
-        className="text-[11.5px] px-2.5 py-1 rounded-full text-faint hover:text-accent transition-colors disabled:opacity-60"
+        className="text-[11.5px] px-2 py-1 rounded-full text-faint hover:text-accent transition-colors disabled:opacity-60 whitespace-nowrap"
         disabled={uploading}
+        title="加一份補充文件（SI，PDF）"
         onClick={() => fileInputRef.current?.click()}
       >
-        {uploading ? '上傳中…' : '＋ 補充文件'}
+        {/* 已經有 SI 時縮成一顆「＋」：這一排住在分頁列裡，寸土寸金 */}
+        {uploading ? '上傳中…' : attachments.length === 0 ? '＋ 補充文件' : '＋'}
       </button>
     </>
   );
 
-  // 一份 SI 都沒有時只露一顆淡色小鈕，不打擾原本的版面（工單 §D4）。
-  const docSwitch = attachments.length === 0 ? (
-    <div className="flex items-center justify-center mb-1 shrink-0">{addButton}</div>
-  ) : (
-    <div className="flex items-center justify-center flex-wrap gap-1 mb-2 shrink-0">
-      <div className="inline-flex flex-wrap items-center rounded-full border border-border p-0.5 bg-surface">
-        <button
-          className={`text-[11.5px] px-2.5 py-1 rounded-full transition-colors ${selectedId === null
-            ? 'bg-accent text-accent-fg'
-            : 'text-muted hover:text-accent'
-          }`}
-          onClick={() => setSelectedId(null)}
-        >
-          正文
-        </button>
+  const pill = (active) => `text-[11.5px] px-2.5 py-1 rounded-full transition-colors whitespace-nowrap ${active
+    ? 'bg-accent text-accent-fg'
+    : 'text-muted hover:text-accent'
+  }`;
+
+  // 文件切換：正文｜SI 1｜SI 2…。chip 上只寫「SI N」，名字放 title（滑過去看得到），
+  // 選中之後下面那行小工具列開頭會寫全名。一份 SI 都沒有時只露一顆淡色「＋ 補充文件」。
+  const docSwitch = attachments.length === 0 ? addButton : (
+    <>
+      <div className="inline-flex items-center rounded-full border border-border p-0.5 bg-surface">
+        <button className={pill(selectedId === null)} onClick={() => setSelectedId(null)}>正文</button>
         {attachments.map((a, i) => (
           <button
             key={a.id}
-            className={`text-[11.5px] px-2.5 py-1 rounded-full transition-colors max-w-[11rem] truncate ${selectedId === a.id
-              ? 'bg-accent text-accent-fg'
-              : 'text-muted hover:text-accent'
-            }`}
-            title={a.original_name}
+            className={pill(selectedId === a.id)}
+            title={`${a.label}（${a.original_name}）`}
             onClick={() => setSelectedId(a.id)}
           >
-            SI {i + 1} · {a.label}
+            SI {i + 1}
           </button>
         ))}
       </div>
       {addButton}
-    </div>
+    </>
   );
+
+  // PDF／文字版：正文與 SI 共用同一顆（同一個 localStorage 偏好）。
+  // 掃描版 SI 沒有字可以顯示 → 只有 PDF、不給切。
+  const showModeSwitch = selected ? selected.has_text : (hasPdf && hasText);
+  const activeMode = selected ? (selected.has_text ? mode : 'pdf') : mode;
+  const modeSwitch = showModeSwitch ? (
+    <div className="inline-flex rounded-full border border-border p-0.5 bg-surface">
+      {[
+        ['pdf', 'PDF 原檔', '看原始 PDF 的版面'],
+        ['text', '文字版', selected ? '抽取出來的文字' : '抽取出來的文字——選取後可以直接「問這段」'],
+      ].map(([key, label, tip]) => (
+        <button key={key} className={pill(activeMode === key)} title={tip} onClick={() => switchMode(key)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  ) : null;
+
+  // 工單 24b：這兩排控制項收進 PaperDetail 分頁列右側的插槽——她嫌它們佔地方，
+  // 要把高度還給 PDF。沒拿到插槽（別處單獨用這個元件）就退回內容區頂端，功能不少。
+  const controlsInner = <>{docSwitch}{modeSwitch}</>;
+  const controls = controlsSlot
+    ? createPortal(controlsInner, controlsSlot)
+    : <div className="flex items-center justify-center flex-wrap gap-1.5 mb-2 shrink-0">{controlsInner}</div>;
 
   const errorLine = error ? (
     <p className="text-xs text-danger text-center mb-2 shrink-0">{error}</p>
@@ -397,35 +419,12 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
 
   // ── 選到某一份 SI ────────────────────────────────────────────────
   if (selected) {
-    // 掃描版只有 PDF 模式（沒有字可以顯示）
-    const siMode = selected.has_text ? mode : 'pdf';
-
-    const siModeSwitch = selected.has_text ? (
-      <div className="flex items-center justify-center gap-1 mb-2 shrink-0">
-        <div className="inline-flex rounded-full border border-border p-0.5 bg-surface">
-          {[['pdf', 'PDF 原檔'], ['text', '文字版']].map(([key, label]) => (
-            <button
-              key={key}
-              className={`text-[11.5px] px-2.5 py-1 rounded-full transition-colors ${siMode === key
-                ? 'bg-accent text-accent-fg'
-                : 'text-muted hover:text-accent'
-              }`}
-              onClick={() => switchMode(key)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
-    ) : null;
-
     return (
       <div className="flex flex-col h-full">
-        {docSwitch}
+        {controls}
         <AttachmentToolbar item={selected} onPatch={patchSelected} onDelete={deleteSelected} busy={busy} />
         {errorLine}
-        {siModeSwitch}
-        {siMode === 'pdf' ? (
+        {activeMode === 'pdf' ? (
           <>
             <iframe
               key={selected.id}   /* 換一份就換一個 iframe，免得殘留上一份 */
@@ -454,32 +453,12 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
     );
   }
 
-  // ── 正文（以下行為與工單 24 之前完全一致）────────────────────────
-  const modeSwitch = hasPdf && hasText ? (
-    <div className="flex items-center justify-center gap-1 mb-2 shrink-0">
-      <div className="inline-flex rounded-full border border-border p-0.5 bg-surface">
-        {[['pdf', 'PDF 原檔'], ['text', '文字版（可選取提問）']].map(([key, label]) => (
-          <button
-            key={key}
-            className={`text-[11.5px] px-2.5 py-1 rounded-full transition-colors ${mode === key
-              ? 'bg-accent text-accent-fg'
-              : 'text-muted hover:text-accent'
-            }`}
-            onClick={() => switchMode(key)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-    </div>
-  ) : null;
-
+  // ── 正文（內容區的行為與工單 24 之前完全一致）──────────────────────
   if (hasPdf && mode === 'pdf') {
     return (
       <div className="flex flex-col h-full">
-        {docSwitch}
+        {controls}
         {errorLine}
-        {modeSwitch}
         <iframe
           src={`/api/papers/${paper.id}/pdf`}
           className="flex-1 w-full border border-border rounded-lg bg-surface"
@@ -498,7 +477,7 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
   if (!hasText) {
     return (
       <div className="flex flex-col h-full">
-        {docSwitch}
+        {controls}
         {errorLine}
         <div className="text-center py-12 text-faint text-sm">
           <p>無法顯示原文</p>
@@ -512,9 +491,8 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
 
   return (
     <div className="flex flex-col h-full">
-      {docSwitch}
+      {controls}
       {errorLine}
-      {modeSwitch}
       <p className="text-xs text-faint text-center mb-3">
         {hasPdf
           ? `提取的文字版（選取 ${MIN_SELECTION_CHARS} 字以上會浮出「問這段」）`

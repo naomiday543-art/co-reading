@@ -257,3 +257,19 @@ multer 1.x 底下的 busboy **用 latin1 解 multipart 檔名**。上傳「第�
 **我認可的偏離**：附錄 A 五條全部認可（報告併入本檔、worktree、`planSiBudget` 提前、清單撈在 PaperDetail、10 份上限整批拒絕）。
 **已知、不修**：正文上傳（`papers.js`）的 `originalname` 同樣是 latin1 亂碼，但它**只進 `app.log` 和一個前端不讀的回應欄位**（papers 表不存原始檔名、標題由通讀產生、上傳進度列用的是瀏覽器端 `f.name`）——對她零可見影響，不為此另開工單。B6.6 的 `LENGTH()` vs `.length` 單位差：只在 SI 含 astral 字元且剛好壓在截斷線時讓「AI 讀了幾字」差個位數，送出去的字以 JS `slice` 為準，不修。
 **還沒做**：合 main（＝她的 `node --watch` 會自動重啟並在真庫建新表）與 build 進主樹 `dist/`——等她點頭，合之前先 `.backup` 真庫、確認沒有 in-flight 的 `[CHAT]`／`[ANALYZE]`。
+
+---
+
+## 附錄 D：合入記錄＋工單 24b 版面收緊（2026-09-21 傍晚，Elias）
+
+**合入**：她說「好，合併吧，開的是 http://localhost:5173/」→ 15:53 `--no-ff` 合入 main `e255812`。備份 `data/co-reading.db.bak-20260921-wo24`（五表 COUNT 對帳＋integrity ok）；in-flight 閘門單獨查過（0 連線、無 analyzing）；她的 `node --watch` 15:53:02 自動重啟，真庫多一張空的 `paper_attachments`，papers 13／messages 97 沒少；`:3456` 與 `:5173` 兩條路的 attachments API 都 200；main 上 631/631。**她前端開的是 `:5173`（vite dev）⇒ 不用 build `dist/`。** 未 push。
+
+**24b（她掛了第一份真 SI 後當場回饋）**
+> 「這個有點太佔地方了，能否移動到上面一欄，這樣就可以多點位置給 PDF 文件」
+
+- 「正文｜SI…｜＋」與「PDF 原檔｜文字版」兩排，從內容區頂端**收進分頁列（AI 摘要｜原文）那一行的右側**。作法：`PaperDetail` 在分頁列尾端放一個插槽 `<div ref={setControlsSlot}>`（DOM node 存 state，不是 useRef——節點就位要觸發重渲染），`FullTextView` 收 `controlsSlot` prop、用 `createPortal` 把控制項畫進去；**沒拿到插槽就退回內容區頂端**，元件單獨用也不壞。狀態一律留在 `FullTextView`，沒有往上提。
+- 為了塞進一行：SI chip 只寫「SI N」（全名放 `title`，選中後寫在下面那行小工具列開頭）；已有 SI 時上傳鈕縮成「＋」（沒有 SI 時仍是「＋ 補充文件」，保留可發現性）；模式鈕文案「文字版（可選取提問）」→「文字版」（說明放 `title`；iframe 下方那句「切到文字版…問這段」的提示沒動）。
+- 左欄被拖得很窄、一行放不下時：分頁列 `flex-wrap-reverse`，插槽**整塊**折到上面一行，兩顆分頁留在底行貼底線。實測左欄 306px → 兩行 72px（第一版是 slot 自己 wrap，會擠成三行 95px，已改掉）；左欄 496px（1280 視窗預設分欄）→ 一行 37.75px、不溢出。
+- 收益：正文／SI 的 PDF 各多拿回約 65–70px 高度。選到 SI 時那一行小工具列（名字／字數／AI 讀得到／改名／刪除這份）保留。
+- 只動 `frontend/src/components/FullTextView.jsx`、`frontend/src/pages/PaperDetail.jsx`；後端零改動。631/631、build 到暫存綠、副本＋瀏覽器親驗（寬／窄、正文／SI、兩份 SI）。
+- 🔴 合入時 `PaperDetail` 多了一顆 `useState` ⇒ Fast Refresh 會整個重掛這一頁（PDF 回第一頁、進行中的串流**顯示**會斷，後端照跑落庫）——所以合之前一樣先查 in-flight。
