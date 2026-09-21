@@ -169,6 +169,44 @@
         -webkit-line-clamp: 2;
       }
 
+      /* ===== 工單 26 §D1／§D6：論文頁頂列與上傳 ===== */
+      /* ⬆ 鈕上傳中的轉圈 */
+      @keyframes cr-spin { to { transform: rotate(360deg); } }
+      .cr-spin { animation: cr-spin 0.9s linear infinite; }
+      @media (prefers-reduced-motion: reduce) { .cr-spin { animation: none; } }
+
+      /* 上傳失敗的小提示：細條沒了，失敗不能跟著靜悄悄。貼在 52px 頂列下方，4 秒自己收。 */
+      .cr-upload-fail {
+        position: fixed; top: 52px; left: 0; right: 0; z-index: 70;
+        padding: 6px 14px;
+        font-size: 11.5px; line-height: 1.5; color: var(--danger);
+        background: var(--surface-alt);
+        border-bottom: 1px solid var(--border);
+        box-shadow: var(--shadow-sm);
+      }
+
+      /* 把檔案拖進視窗 → 整頁變成拖放層（工單 26 §D6）。
+         內框 pointer-events:none，免得指標在子元素之間移動時 dragleave 亂跳；
+         「這篇屬於」那一格自己打開 pointer-events。 */
+      .cr-drop-overlay {
+        position: fixed; inset: 0; z-index: 80;
+        display: flex; align-items: center; justify-content: center;
+        padding: 34px;
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+      }
+      .cr-drop-overlay-frame {
+        flex: 1; height: 100%;
+        border: 2px dashed var(--accent); border-radius: 14px;
+        background: var(--surface);
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+        pointer-events: none;
+      }
+
+      /* 窄螢幕的頂列：C 徽章與它右邊那條細線先讓位，寧可少一顆裝飾也不要擠到溢出 */
+      @media (max-width: 767px) {
+        .cr-detail-header .cr-hdr-brand { display: none !important; }
+      }
+
       /* ===== 閱讀模式（工單 06 §3.1）=====
          只在論文頁 + readingMode 時掛在 <main> 上。padding 必須 !important：
          Tailwind CDN 的 style 是 runtime 注入的，排在這個 <style> 後面。 */

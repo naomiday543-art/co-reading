@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { papersApi, tagsApi, treeApi, insightsApi, attachmentsApi } from '../api';
 import { useStore } from '../store';
 import SummaryView from '../components/SummaryView';
@@ -47,7 +48,7 @@ function loadDrawerWidth() {
   }
 }
 
-export default function PaperDetail({ paperId, onBack, onNavigate }) {
+export default function PaperDetail({ paperId, onBack, onNavigate, headerMainSlot = null, headerEndSlot = null }) {
   const [paper, setPaper] = useState(null);
   const [loading, setLoading] = useState(true);
   const [split, setSplit] = useState(loadSplit);
@@ -135,6 +136,23 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
       .then(setRelatedInsights)
       .catch(() => {});
   }, [paper?.id]);
+
+  // 狀態下拉搬進頂列之後是一片絕對定位的小板子——點外面／Escape 要收得掉，
+  // 而且 listener 必須在關掉時就拆（不然它會一直賴在 document 上）。
+  const statusBoxRef = useRef(null);
+  useEffect(() => {
+    if (!statusMenu) return;
+    const onDown = (e) => {
+      if (!statusBoxRef.current?.contains(e.target)) setStatusMenu(false);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') setStatusMenu(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [statusMenu]);
 
   const handleStatusChange = async (status) => {
     await papersApi.update(paperId, { status });
@@ -342,58 +360,83 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
     return <div className="flex items-center justify-center h-64 text-faint">論文不存在</div>;
   }
 
+  const fullTitle = paper.title || paper.pdf_filename || '未命名';
+
+  // 工單 26 §D1：這一段照常在 PaperDetail 裡宣告，只是畫到 App 頂列的插槽去
+  // （createPortal 不改 React 樹，事件與 state 都還在這裡）。
+  const topbarMain = (
+    <>
+      <button onClick={onBack} className="flex items-center gap-1 text-muted hover:text-text-strong text-[12.5px] shrink-0 px-1.5 py-1 rounded-md hover:bg-surface-hover transition-colors">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
+        返回列表
+      </button>
+      {/* 閱讀模式開關——抽屜開著時也不會被蓋住 */}
+      <button
+        className={`text-[11.5px] border rounded-full pl-2 pr-2.5 py-[3px] flex items-center gap-1 shrink-0 transition-colors ${readingMode
+          ? 'border-accent bg-accent-soft text-accent font-medium'
+          : 'border-border text-muted hover:bg-surface-hover hover:text-text-strong'
+        }`}
+        onClick={toggleReadingMode}
+        title={readingMode ? '離開閱讀模式' : '閱讀模式：論文撐滿，討論收到右下角'}
+      >
+        {readingMode ? (
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3" /></svg>
+        ) : (
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" /></svg>
+        )}
+        {readingMode ? '離開閱讀' : '閱讀模式'}
+      </button>
+
+      <div className="flex-1 min-w-0 flex items-center gap-2">
+        <h2 className="cr-serif text-[15.5px] text-text-strong truncate min-w-0" title={fullTitle}>{fullTitle}</h2>
+
+        {/* Status dropdown */}
+        <div className="relative shrink-0" ref={statusBoxRef}>
+          <button
+            className="text-[11.5px] border border-border bg-surface-alt rounded-full pl-2.5 pr-2 py-[3px] text-muted hover:bg-surface-hover hover:text-text-strong flex items-center gap-1 transition-colors"
+            onClick={() => setStatusMenu(!statusMenu)}
+          >
+            {statusLabels[paper.status]} ▾
+          </button>
+          {statusMenu && (
+            <div className="absolute left-0 top-[calc(100%+5px)] bg-surface border border-border rounded-lg shadow-lg z-[60] py-1 text-sm min-w-[104px]">
+              {Object.entries(statusLabels).map(([k, v]) => (
+                <button key={k} className="block w-full text-left px-3 py-1.5 hover:bg-surface-hover"
+                  onClick={() => handleStatusChange(k)}>{v}</button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+
+  // 工單 26 §三：最右那顆**不是**「關閉這篇」，是刪除論文（有 confirm）——換成垃圾桶，
+  // 字也講清楚，免得她以為只是把頁面關掉。
+  const deleteButton = (
+    <button
+      onClick={handleDelete}
+      className="w-7 h-7 shrink-0 flex items-center justify-center rounded-md text-faint hover:text-danger hover:bg-surface-hover transition-colors"
+      title="刪除這篇論文"
+    >
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2.8 4.2h10.4M6.3 4.2V2.9h3.4v1.3M4.1 4.2l.6 8.2a1 1 0 0 0 1 .93h4.6a1 1 0 0 0 1-.93l.6-8.2M6.6 6.5v4.4M9.4 6.5v4.4" />
+      </svg>
+    </button>
+  );
+
   return (
     <div className="flex flex-col h-full">
-      {/* Top bar */}
-      <div className="cr-detail-topbar flex items-center justify-between mb-4 shrink-0 gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <button onClick={onBack} className="flex items-center gap-1.5 text-muted hover:text-text-strong text-[13px] shrink-0 transition-colors">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
-            返回列表
-          </button>
-          {/* 閱讀模式開關——放左群組，抽屜開著時也不會被蓋住 */}
-          <button
-            className={`text-[11.5px] border rounded-full pl-2 pr-2.5 py-1 flex items-center gap-1 shrink-0 transition-colors ${readingMode
-              ? 'border-accent bg-accent-soft text-accent font-medium'
-              : 'border-border-soft bg-surface-alt text-muted hover:bg-surface-hover'
-            }`}
-            onClick={toggleReadingMode}
-            title={readingMode ? '離開閱讀模式' : '閱讀模式：論文撐滿，討論收到右下角'}
-          >
-            {readingMode ? (
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3" /></svg>
-            ) : (
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" /></svg>
-            )}
-            {readingMode ? '離開閱讀' : '閱讀模式'}
-          </button>
-          <div className="w-px h-5 bg-border shrink-0" />
-          <h2 className="cr-serif font-semibold text-[15.5px] text-text-strong truncate">{paper.title || paper.pdf_filename || '未命名'}</h2>
-
-          {/* Status dropdown */}
-          <div className="relative shrink-0">
-            <button
-              className="text-[11.5px] border border-border-soft bg-surface-alt rounded-full pl-2.5 pr-2 py-1 text-muted hover:bg-surface-hover flex items-center gap-1"
-              onClick={() => setStatusMenu(!statusMenu)}
-            >
-              {statusLabels[paper.status]} ▾
-            </button>
-            {statusMenu && (
-              <div className="absolute left-0 top-8 bg-surface border border-border rounded-lg shadow-lg z-20 py-1 text-sm">
-                {Object.entries(statusLabels).map(([k, v]) => (
-                  <button key={k} className="block w-full text-left px-3 py-1.5 hover:bg-surface-hover"
-                    onClick={() => handleStatusChange(k)}>{v}</button>
-                ))}
-              </div>
-            )}
-          </div>
-
+      {/* Top bar —— 兩個插槽都在時整列住進 App 的 52px 頂列；
+          拿不到插槽（別處單獨用這個元件）就退回原本這一條，功能一顆不少。 */}
+      {headerMainSlot ? createPortal(topbarMain, headerMainSlot) : null}
+      {headerEndSlot ? createPortal(deleteButton, headerEndSlot) : null}
+      {(!headerMainSlot || !headerEndSlot) && (
+        <div className="cr-detail-topbar flex items-center justify-between mb-4 shrink-0 gap-2.5">
+          {!headerMainSlot && <div className="flex items-center gap-2.5 min-w-0 flex-1">{topbarMain}</div>}
+          {!headerEndSlot && deleteButton}
         </div>
-
-        <button onClick={handleDelete} className="text-faint hover:text-danger text-sm shrink-0 p-1 rounded hover:bg-surface-hover transition-colors" title="刪除">
-          ✕
-        </button>
-      </div>
+      )}
 
       {/* Split content */}
       <div ref={splitBoxRef} className="cr-detail-split flex flex-1 overflow-hidden gap-0 min-h-0">
