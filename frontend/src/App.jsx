@@ -161,7 +161,9 @@ export default function App() {
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
         {page !== 'settings' && !detailReading && <Sidebar onNavigate={navigate} onRefresh={loadData} />}
-        <main className={`cr-main flex-1 overflow-y-auto p-6 bg-bg${detailReading ? ' cr-main--reading' : ''}`}>
+        {/* 工單 25 附錄 B：論文詳情頁底部只留 8px——下面緊接著就是上傳細條，24px 的留白讓兩個閱讀框
+            離它「有點遠」（她的原話）。其他頁面照舊 p-6。 */}
+        <main className={`cr-main flex-1 overflow-y-auto bg-bg ${page === 'detail' ? 'px-6 pt-6 pb-2' : 'p-6'}${detailReading ? ' cr-main--reading' : ''}`}>
           {page === 'library' && <Library onNavigate={navigate} onRefresh={loadData} />}
           {page === 'detail' && <PaperDetail paperId={paperId} onBack={() => navigate('library')} onNavigate={navigate} />}
           {/* 摘要對比（工單 09 §3.3）：sidebar 照常，不進 mobile tabbar */}

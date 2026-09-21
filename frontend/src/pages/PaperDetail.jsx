@@ -22,7 +22,10 @@ const DRAWER_DEFAULT = 420;
 const SPLIT_KEY = 'co-reading:detail-split';
 const SPLIT_MIN = 30;
 const SPLIT_MAX = 70;
-const SPLIT_DEFAULT = 50;
+// 預設 58 而不是 50（工單 25 附錄 B）：Chrome 新版 PDF 檢視器的工具列有一個不小的最小寬度，
+// 左欄只有半個視窗時放不下 ⇒ 檢視器整頁多出一條橫向捲軸（她兩張截圖量出來都是「還差一成寬」）。
+// 多給左欄 8% 就夠；她自己拖過的位置（localStorage）永遠優先。
+const SPLIT_DEFAULT = 58;
 
 function loadSplit() {
   try {
@@ -49,6 +52,7 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
   const [loading, setLoading] = useState(true);
   const [split, setSplit] = useState(loadSplit);
   const splitRef = useRef(split);
+  const splitBoxRef = useRef(null);   // 分欄容器：拖曳時百分比要以它為基準（見下方 onMove）
   // 'summary' | 'fulltext'——閱讀模式下刷新回來也該是 PDF，不是摘要
   const [leftTab, setLeftTab] = useState(() => (useStore.getState().readingMode ? 'fulltext' : 'summary'));
   const [statusMenu, setStatusMenu] = useState(false);
@@ -195,11 +199,35 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
 
   // Split dragging — uses an overlay to prevent iframe from stealing mouseup
   const [isDragging, setIsDragging] = useState(false);
-  const handleMouseDown = () => { setIsDragging(true); };
+  // 雙擊分隔線＝還原。不能用 onDoubleClick：第一下 mousedown 就會蓋上一層全螢幕遮罩
+  // （防 iframe 偷走 mouseup），第二下 click 落在遮罩上，瀏覽器不會對握把發 dblclick。
+  // 所以在 mousedown 自己量兩下的間隔。
+  const lastHandleDownRef = useRef(0);
+  const handleMouseDown = () => {
+    const now = Date.now();
+    if (now - lastHandleDownRef.current < 350) {
+      lastHandleDownRef.current = 0;
+      resetSplit();
+      return;
+    }
+    lastHandleDownRef.current = now;
+    setIsDragging(true);
+  };
+  // 回到預設寬度，並忘掉記住的位置
+  const resetSplit = () => {
+    splitRef.current = SPLIT_DEFAULT;
+    setSplit(SPLIT_DEFAULT);
+    try { localStorage.removeItem(SPLIT_KEY); } catch {}
+  };
   useEffect(() => {
     if (!isDragging) return;
     const onMove = (e) => {
-      const pct = (e.clientX / window.innerWidth) * 100;
+      // 左欄的 `width: N%` 是相對於分欄容器，不是整個視窗——原本用 clientX / innerWidth 算，
+      // 側欄開著（容器左邊多 250px）時分隔線完全不跟手。改成以容器自己的位置與寬度為基準。
+      const box = splitBoxRef.current?.getBoundingClientRect();
+      const pct = box && box.width > 0
+        ? ((e.clientX - box.left) / box.width) * 100
+        : (e.clientX / window.innerWidth) * 100;
       const next = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, pct));
       splitRef.current = next;
       setSplit(next);
@@ -368,7 +396,7 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
       </div>
 
       {/* Split content */}
-      <div className="cr-detail-split flex flex-1 overflow-hidden gap-0 min-h-0">
+      <div ref={splitBoxRef} className="cr-detail-split flex flex-1 overflow-hidden gap-0 min-h-0">
         {/* Left: Summary / Fulltext tabs */}
         <div className="cr-detail-pane flex flex-col overflow-hidden" style={{ width: readingMode ? '100%' : `${split}%` }}>
           {/* Tab bar */}
@@ -566,9 +594,13 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
         {/* Split handle — 閱讀模式下不渲染 */}
         {!readingMode && (
           <div
-            className="cr-split-handle w-1.5 bg-border-soft hover:bg-accent-soft cursor-col-resize shrink-0 rounded-full my-4 transition-colors"
+            className="cr-split-handle group relative w-1.5 bg-border-soft hover:bg-accent-soft cursor-col-resize shrink-0 rounded-full my-4 transition-colors"
+            title="拖曳調整左右寬度（會記住位置）· 雙擊還原"
             onMouseDown={handleMouseDown}
-          />
+          >
+            {/* 中間一小段深一點的握把：原本整條跟背景幾乎同色，她根本不知道這裡能拖 */}
+            <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-10 rounded-full bg-faint opacity-40 group-hover:opacity-100 group-hover:bg-accent transition" />
+          </div>
         )}
 
         {/* Right: Chat —— 閱讀模式下同一個 div 變成浮動抽屜。
