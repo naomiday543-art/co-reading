@@ -51,6 +51,30 @@ export const papersApi = {
     request(`/papers/${paperId}/claims/${claimId}/provenance`),
 };
 
+// 補充文件／SI（工單 24 §D4）。掛在 /api/papers/:id/attachments。
+//
+// upload 不走 papersApi.upload 那種「回 r.json() 不看狀態碼」的寫法：SI 的 400
+// 帶的是她要直接讀的中文（「目前只支援 PDF 的補充文件」／「最多 10 份」），
+// 吞掉就只剩一個靜悄悄失敗的 ＋ 號。
+export const attachmentsApi = {
+  list: (paperId) => request(`/papers/${paperId}/attachments`),
+  upload: async (paperId, files) => {
+    const form = new FormData();
+    for (const f of files) form.append('files', f);
+    const res = await fetch(`${API}/api/papers/${paperId}/attachments`, { method: 'POST', body: form });
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    if (!res.ok) throw new Error(body.error || res.statusText);
+    return body;
+  },
+  text: (paperId, aid) => request(`/papers/${paperId}/attachments/${aid}/text`),
+  patch: (paperId, aid, data) =>
+    request(`/papers/${paperId}/attachments/${aid}`, { method: 'PATCH', body: data }),
+  remove: (paperId, aid) =>
+    request(`/papers/${paperId}/attachments/${aid}`, { method: 'DELETE' }),
+  // iframe 的 src；瀏覽器自己去抓，不經過 request()
+  fileUrl: (paperId, aid) => `${API}/api/papers/${paperId}/attachments/${aid}/file`,
+};
+
 export const tagsApi = {
   list: () => request('/tags'),
   create: (name, color) => request('/tags', { method: 'POST', body: { name, color } }),

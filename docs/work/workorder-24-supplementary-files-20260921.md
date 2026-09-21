@@ -107,3 +107,130 @@ CREATE INDEX IF NOT EXISTS idx_paper_attachments_paper ON paper_attachments(pape
 三個 commit：①D1+D2＋`attachments.test.js`；②D3＋`si-block.test.js`；③D4 前端＋`TECHNICAL_MANUAL.md` 補一節。報告 `docs/work/report-24-supplementary-files-20260921.md`（changed-file list、**明確寫出沒改什麼**、測試數字、`renderSiBlock` 三種情境的實際輸出樣本、已知限制），偏離寫本檔附錄 A，十行內回覆。commit 結尾 `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`。
 
 ---
+
+## 附錄 A：偏離規格的地方（2026-09-21 實作）
+
+一共五條，每條都說明為什麼。
+
+**A1. 交付報告寫在本檔附錄 B，沒有另開 `docs/work/report-24-…md`。**
+實作 agent 的工具層禁止新建 report／summary 類 `.md` 檔（只准編輯既有檔）。內容一字不少，全部搬進本檔附錄 B。倉內本來就有「附錄寫在工單檔裡」的前例（工單 23 附錄 B 親驗記錄，`57f1c06`）。
+
+**A2. 在 worktree 裡做，不在主樹。**
+她的 `node --watch src/server.js` 正佔著主樹 :3456 連著真資料庫，存 `src/` 下任何檔都會讓它重啟、載入半成品代碼。全程在 `.claude/worktrees/wo24` 做；主樹全程停在 `main`、工作樹乾淨。
+
+**A3. `resolvePaperSiLimit()` 與 `planSiBudget()` 落在 commit ①，不是 ②。**
+工單 §D3 把這兩顆歸在 D3，但 §D2 的 `GET /` 列表要回 `ai_chars_sent`／`truncated`，非有它們不可。若照原順序，commit ① 的測試就得跳過那兩個欄位。兩顆都是純函式、位置仍在 `src/ai.js`（檔案白名單沒變），只是提前一個 commit 落地。`renderSiBlock` 與注入點仍在 ②。
+
+**A4. SI 清單撈在 `PaperDetail`，不是 `FullTextView` 內部。**
+工單 §D4 的坑提示同時說了「元件內 fetch」與「數量請在 PaperDetail 層拿」。「原文」tab 沒打開時 `FullTextView` 不會 mount，而標籤上的「· SI N」在摘要頁就要看得見，所以清單撈在 `PaperDetail`（`useCallback` 綁 `paperId`，換論文自動重抓），往下傳 `attachments` ＋ `onAttachmentsChange`。`FullTextView` 仍負責「換論文／被選中那份被刪掉 → 回到正文」。只撈一次，不重複請求。
+
+**A5. 10 份上限是整批拒絕，不是填滿到 10。**
+工單只寫「超過 400」。一次丟 12 份會整批 400 並把落盤檔全清掉，而不是收前 N 份。理由：部分成功最難講清楚，也最容易讓她以為全上了。
+
+**另外**（不算偏離，但要你知道）：實作過程在 `routes/papers.js` 既有的正文 PDF 上傳路徑發現**同一個 multer 中文檔名亂碼 bug**（`file.originalname` 走 latin1）。**本單沒有修它**——§四紅線只准動刪除級聯那段。要不要修請你拍板。
+
+---
+
+## 附錄 B：交付報告
+
+**分支**：`feat/wo24-supplementary-files`（從 `main` @ `7e2f680` 開）
+**測試**：588（基線，開工第一件事親跑確認）→ **631 全綠**（新增 43 顆：`attachments.test.js` 19、`si-block.test.js` 24）
+**build**：`npm run build -- --outDir <暫存>` 綠（351 modules，`dist/` 一個字沒動）
+
+### B1. 改了什麼（changed-file list）
+
+| 檔案 | 動作 | 內容 |
+|---|---|---|
+| `src/db.js` | 改 | 建表區加 `paper_attachments` ＋索引（`CREATE TABLE IF NOT EXISTS`，FK CASCADE） |
+| `src/routes/attachments.js` | **新** | SI 子路由六個口（list／upload／file／text／PATCH／DELETE）＋ `unlinkAttachmentsOfPaper()` |
+| `src/routes/papers.js` | 改 | **只動 `DELETE /:id` 一處**：刪論文前先 unlink 該篇所有 SI 磁碟檔（＋一行 import） |
+| `src/server.js` | 改 | 註冊 `app.use('/api/papers/:id/attachments', attachmentsRouter)`（＋一行 import） |
+| `src/ai.js` | 改 | 新增 `resolvePaperSiLimit()`／`planSiBudget()`／`buildSiContext()`／`renderSiBlock()`；`buildChatSystem` 多收可選 `siBlock`；`chatAboutPaper` 查一次 SI 並在 `[CHAT] start` 加 `si=` |
+| `frontend/src/api.js` | 改 | 新增 `attachmentsApi` |
+| `frontend/src/components/FullTextView.jsx` | 改 | 文件切換 chips、SI 的 PDF／文字版、SI 小工具列、`quoteJump` 先切回正文 |
+| `frontend/src/pages/PaperDetail.jsx` | 改 | 撈 SI 清單、「原文 · SI N」標籤、往下傳 |
+| `test/attachments.test.js` | **新** | 子路由實打 19 顆 |
+| `test/si-block.test.js` | **新** | SI 區塊與預算 24 顆 |
+| `test/fixtures/make-pdf.js` | **新** | 手寫最小含字 PDF 產生器（沒裝新套件） |
+| `TECHNICAL_MANUAL.md` | 改 | §5.1b 資料表、§7.1b API、§10 env、§12 測試、目錄樹與 `DELETE /:id` 那一列 |
+| 本檔 | 改 | 附錄 A＋附錄 B |
+
+### B2. **明確沒改什麼**（紅線對帳）
+
+- **`papers.full_text`／`text_meta`／`messages.quote` 的語義零改動**。SI 的文字只住 `paper_attachments.extracted_text`，**永不拼進 `full_text`**。有測試釘：上傳兩份 SI 後 `papers` 的 `full_text`／`text_meta`／`analyze_status`／`updated_at` 四欄 `deepEqual` 完全相同。
+- **`buildPaperBlock` 一個字沒動**（零回歸快照就是釘它）。`buildAnalyzeUserContent`、`prepareFullTextForModel`、`stripReferences`、`clipFullText` 全沒動。
+- **通讀線沒動**：上傳 SI **不觸發** `triggerAnalyze`、不寫 `papers` 任何欄位。
+- **compare／carryover／progress／gateway／insights／memory／directions 一律沒動**：`src/{compare,carryover,progress,gateway,memory,directions}.js`、`src/routes/{chat,compare,tree,tags,insights,activity,directions}.js` 全不在 diff 裡。
+- **`src/pdf.js` 沒動**（只是被呼叫）。
+- **`package.json`／`package-lock.json` 沒動**——沒裝任何新套件（親自查過命中數為 0）。
+- **`dist/` 沒被覆蓋**（build 導到暫存）。**`data/` 一個位元組都沒碰**（測試全走 temp dataDir）。
+- 第三層（SI 的「問這段」／docx・xlsx／通讀吃 SI／vision／SI 全文搜尋）**一項都沒做**。
+
+### B3. `renderSiBlock` 三種情境的**實際輸出**
+
+以下是在 temp DB 上真的跑出來的字，不是照代碼手抄的。
+
+**A：一份完整（預設上限 100,000 字）**
+
+```
+以下是這篇論文的補充材料（Supplementary Information，共 1 份）。回答用到時請說明出自哪一份 SI；沒列在這裡的補充材料你讀不到，不要推測。
+
+【SI 1：方法細節】
+Supplementary Methods
+Samples were digested with KOH at 60 C for 24 h.
+```
+
+**B：合計預算 60 字，四份 —— 完整／截斷／被擠掉／掃描版**
+
+```
+以下是這篇論文的補充材料（Supplementary Information，共 4 份）。回答用到時請說明出自哪一份 SI；沒列在這裡的補充材料你讀不到，不要推測。
+
+【SI 1：方法細節】
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+
+【SI 2：Table S1 回收率】（只給了前 20 字，全長 50 字）
+BBBBBBBBBBBBBBBBBBBB
+
+【SI 3：Figure S3 原始圖】（超出字數預算，這份沒給你）
+
+【SI 4：掃描的附錄】（掃描版，抽不到文字——這份你讀不到）
+```
+
+SI 3 被擠掉時**一個 `C` 都沒出現**（有測試釘）；掃描版**不佔預算**但仍算進「共 4 份」——要讓模型知道「有這份、你讀不到」，不要它推測。
+
+**C：沒有任何可見 SI（全部 `ai_visible=0`／env=0／根本沒掛）**
+
+```
+""
+```
+
+空字串，注入點連一個換行都不加 ⇒ 討論 system 與工單 24 之前**逐字相同**，釘在既有快照 `test/fixtures/chat-system-no-directions.json`（anthropic 陣列與 openai 字串兩種 format 都測）。
+
+### B4. 過程中查出來的兩個坑（都寫進代碼註解了）
+
+**1. multer 的中文檔名是壞的（真 bug，已修）**
+multer 1.x 底下的 busboy **用 latin1 解 multipart 檔名**。上傳「第一份 SI.pdf」到手是 `ç¬¬ä¸ä»½ SI.pdf`，名字從入庫那一刻就是亂碼。修法 `decodeOriginalName()`（latin1 位元組 → UTF-8，解出 U+FFFD 退回原字串；純 ASCII 原樣不動）。測試用中文檔名上傳＋下載驗 header 解得回原名。
+⚠️ 同一個 bug 在既有的 `routes/papers.js` 正文上傳也有，**本單沒修**（見附錄 A 末段）。
+
+**2. 測試用的小 PDF 抽不到字（pdf.js 的 buffer pool 陷阱）**
+手寫 640 bytes 的 PDF 丟給 `extractPDFDetailed` 一律報 `bad XRef entry`，而 xref 偏移逐一驗過都對。真因（patch 一份 pdf.js 副本印內部狀態才定位到）：pdf-parse 綁的 pdf.js v1.10.100 在 `XRef.fetchUncompressed()` 走 `this.stream.makeSubStream(offset + start)`，而 `makeSubStream` 拿的是 **`this.bytes.buffer`**（整個底層 ArrayBuffer）。Node 的 `readFileSync` 對**小於 4KB** 的檔案回的是**共用 pool** 上的 Buffer（`byteOffset !== 0`），偏移就落到 pool 裡別人的位元組上。對策：`make-pdf.js` 把 PDF 墊到 8KB（墊一行 `%` 註解，零語義影響）。**這是測試夾具的問題，不是產品的坑**——真實 SI PDF 沒有一份小於 4KB。連跑三次確認穩定。
+
+### B5. 驗證
+
+- `npm test` **631/631 綠**。better-sqlite3 沒 ABI 問題，不需要 `npm rebuild`。
+- `npm run build -- --outDir <暫存>` 綠；`dist/` 不存在於 worktree、也沒被建立。
+- `FullTextView` 六種狀態的 **react-dom 靜態渲染實測**全過（沒有 SI／有 chips／截斷／擠掉／掃描版／無 PDF 只有文字），用倉內既有的 esbuild 打包，沒裝東西。
+- 「同一顆預算函式」是真的：`GET /` 的 `ai_chars_sent`／`truncated` 與 `renderSiBlock` 都走 `planSiBudget()`。
+
+### B6. 已知限制 / 我沒做到 / 不確定的地方（直說）
+
+1. **沒有在瀏覽器裡實彈驗收過**。前端只做到靜態渲染跑得起來＋ vite build 綠。**chips 點下去換 SI、上傳轉圈、改名 Enter／Escape、刪除二次確認、`quoteJump` 跳回正文**這些互動**沒有真的用滑鼠點過**——她的服務正佔著 :3456 連著真庫，不該另起服務去搶。§五「我」那段的實彈驗收請你親跑。
+2. **`AttachmentToolbar` 沒進靜態渲染測試**：它只在選中某份 SI 後出現，而選中與否是元件內部 state，靜態渲染碰不到。四種 `aiNote` 文案目前只有代碼審查，沒有自動化測試釘。
+3. **上傳中途部分失敗的 UI 沒測**：後端 `failed` 陣列有測試，前端把它串成一行紅字這件事沒有覆蓋。
+4. **SI 順序畫面上調不動**。`sort_order` 後端 PATCH 得動也會影響吃預算的順序，但 UI 沒有拖拉／上下移動入口——上傳順序就是順序。工單沒要求，沒加。
+5. **掛／卸 SI 會讓該篇 prompt cache 冷一次**（設計如此，§七）。第一次提問會比平常貴一點。
+6. **`chars` 用 SQLite 的 `LENGTH()`**，對 TEXT 回字元數，跟 JS `.length` 同單位——但兩者對 astral plane 字元（emoji、罕用字）算 UTF-16 code unit 還是 code point，**沒有逐一驗證**。SI 裡大量出現這類字元時「AI 讀了幾字」可能有個位數誤差。不影響正確性（截斷用 JS `slice`，與送出去的字完全一致）。
+7. **`ai_visible` 只影響討論線**。通讀摘要本來就不吃 SI（§六 明定不做），關掉它不會讓摘要重算——預期行為，但她第一次用可能以為「關掉就全都不讀了」。
+8. **10 份上限整批拒絕**（見附錄 A5）。
+
+**沒做（範圍外，§六 已列喚醒條件）：** SI 文字版的「問這段」、docx／xlsx、通讀摘要吃 SI、SI 圖表走 vision、SI 全文搜尋與去重。

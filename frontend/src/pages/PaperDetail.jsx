@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { papersApi, tagsApi, treeApi, insightsApi } from '../api';
+import { papersApi, tagsApi, treeApi, insightsApi, attachmentsApi } from '../api';
 import { useStore } from '../store';
 import SummaryView from '../components/SummaryView';
 import FullTextView from '../components/FullTextView';
@@ -32,6 +32,8 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
   // 'summary' | 'fulltext'——閱讀模式下刷新回來也該是 PDF，不是摘要
   const [leftTab, setLeftTab] = useState(() => (useStore.getState().readingMode ? 'fulltext' : 'summary'));
   const [statusMenu, setStatusMenu] = useState(false);
+  // 工單 24 §D4：補充文件清單。撈在這一層，「原文」tab 的標籤才知道有幾份。
+  const [attachments, setAttachments] = useState([]);
   const [tagInput, setTagInput] = useState('');
   const [tagSuggestions, setTagSuggestions] = useState([]);
   const [showTagSuggest, setShowTagSuggest] = useState(false);
@@ -75,6 +77,21 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
   }, [paperId]);
 
   useEffect(() => { loadPaper(); }, [loadPaper]);
+
+  // 補充文件／SI 清單（工單 24 §D4）。
+  // 為什麼撈在這一層而不是 FullTextView 裡：「原文」tab 沒打開時那個元件根本不會
+  // mount，而 tab 標籤上的「· SI N」在摘要頁就要看得見。
+  const loadAttachments = useCallback(async () => {
+    try {
+      const data = await attachmentsApi.list(paperId);
+      setAttachments(data.attachments || []);
+    } catch (err) {
+      console.error(err);
+      setAttachments([]);
+    }
+  }, [paperId]);
+
+  useEffect(() => { loadAttachments(); }, [loadAttachments]);
 
   // Poll while analyzing
   useEffect(() => {
@@ -336,7 +353,9 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
               className={`text-[13px] px-3 py-2 border-b-2 -mb-px transition-colors ${leftTab === 'fulltext' ? 'border-accent text-accent font-medium' : 'border-transparent text-muted hover:text-text-strong'}`}
               onClick={() => setLeftTab('fulltext')}
             >
-              原文
+              原文{attachments.length > 0 && (
+                <span className="text-[11px] text-faint ml-1">· SI {attachments.length}</span>
+              )}
             </button>
           </div>
 
@@ -495,7 +514,11 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
           </div>
             </>
           ) : (
-            <FullTextView paper={paper} />
+            <FullTextView
+              paper={paper}
+              attachments={attachments}
+              onAttachmentsChange={setAttachments}
+            />
           )}
           </div>
         </div>
