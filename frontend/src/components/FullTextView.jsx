@@ -230,12 +230,13 @@ function AttachmentToolbar({ item, onPatch, onDelete, busy }) {
 
       {confirming ? (
         <span className="flex items-center gap-1.5">
-          <span className="text-faint">確定刪除？</span>
+          <span className="text-faint">確定刪除這份補充文件？</span>
           <button className="text-danger hover:underline" disabled={busy} onClick={() => { setConfirming(false); onDelete(); }}>刪除</button>
           <button className="hover:text-accent" onClick={() => setConfirming(false)}>取消</button>
         </span>
       ) : (
-        <button className="hover:text-danger" disabled={busy} onClick={() => setConfirming(true)}>刪除</button>
+        // 頁首還有一顆刪「整篇論文」的「刪除」——這顆要講清楚刪的只是這份 SI。
+        <button className="hover:text-danger" disabled={busy} title="只刪這份補充文件，不動論文" onClick={() => setConfirming(true)}>刪除這份</button>
       )}
     </div>
   );

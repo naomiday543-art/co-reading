@@ -91,7 +91,8 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
     }
   }, [paperId]);
 
-  useEffect(() => { loadAttachments(); }, [loadAttachments]);
+  // 換論文先清空：不然上一篇的 SI chips 會閃一下，手快點下去就是一個 404。
+  useEffect(() => { setAttachments([]); loadAttachments(); }, [loadAttachments]);
 
   // Poll while analyzing
   useEffect(() => {

@@ -234,3 +234,26 @@ multer 1.x 底下的 busboy **用 latin1 解 multipart 檔名**。上傳「第�
 8. **10 份上限整批拒絕**（見附錄 A5）。
 
 **沒做（範圍外，§六 已列喚醒條件）：** SI 文字版的「問這段」、docx／xlsx、通讀摘要吃 SI、SI 圖表走 vision、SI 全文搜尋與去重。
+
+---
+
+## 附錄 C：親驗記錄（2026-09-21 下午，Elias）
+
+**環境**：worktree `.claude/worktrees/wo24`；驗收服務 `:3471`，`CO_READING_DATA_DIR` 指向她資料的**副本**（sqlite `.backup`，12 篇／95 則對帳過）；副本的 `ai_base_url`／`analyze_base_url` 改指本機假上游 `:3481`、key 抹成假值、`gateway_url` 指死埠——**沒打真上游、沒碰 gateway、沒碰她的真庫與 :3456**（事後對帳：真庫無 `paper_attachments` 表、`data/pdfs` 無 `si-*`、服務 PID 自 09:35 未重啟）。實彈素材＝一份真 ACS SI（8 頁，抽字 16,680）。
+
+**親手跑的**
+- `npm test` 631/631（兩次：交件時、我補小修後）。`npm run build -- --outDir <暫存> --emptyOutDir=false` 綠。
+- diff 白名單：13 檔全在名單內；`package.json`／lock／`dist/`／`data/` 零改動；`papers.js` 只多 import＋刪除前 `unlinkAttachmentsOfPaper` 一行。`attachments.js` 349 行逐行讀過。
+- **整條路實彈（curl）**：中文檔名上傳 → DB 裡是正確中文（非 mojibake）、磁碟檔名 `si-<nanoid>.pdf`；`GET file` 的 `Content-Disposition` 為 `filename*=UTF-8''%E8…`、串回位元組與原檔 md5 相同；拿**別篇論文的 id** 配這個 aid 打 file／text／PATCH／DELETE → 四個全 404 且 label 未被改；`.docx` → 400；副檔名 `.pdf` 但 mime 不對 → 400；mime 對但內容是垃圾 → 200＋`failed[]`，不留檔；**好 PDF＋docx 混批 → 整批 400，好的那份也沒殘留**；論文不存在 → 404，不寫檔。每一步後 `ls pdfs | grep -c '^si-'` 都對。
+- **AI 讀得到（假上游落盤 system 全文）**：開 → `sys_chars=98036`、`[CHAT] … si=1/16680`；關 `ai_visible` → `81250`、`si=0/0`（差 16,786＝16,680 字＋區塊頭）；再開 → 回到 98036（同字數，穩定前綴可重現）。落盤的 system 親眼看順序：論文全文 → `以下是這篇論文的補充材料…【SI 1：…】` → `【她的研究方向】` → 洞察變動區。
+- **舊功能沒被擾動**：掛著 SI 時送一則 `quote=paper` 的選段提問 → 後端 slice 驗證通過（`quote=paper:90字 si=1/16680`）。
+- **瀏覽器**：tab 顯示「原文 · SI 1」；chips「正文｜SI 1 · …｜＋補充文件」；SI 的 PDF 原檔在同一個框裡渲染；文字版分段正常、標明不支援選段；改名 Escape 丟棄／Enter 立即存（後者用真 `keydown Enter` 事件確認——Browser pane 的 `Return` 鍵名沒送到 input，是工具面不是產品 bug）；**在 SI 文字版點氣泡的「跳回原文」→ 自動切回正文＋文字版、offset 61639 那段閃、約 2 秒後熄**；刪除二次確認（第一下 DB 仍在、確認後 DB 0 份、tab 標籤回「原文」、chips 收成一顆淡色「＋」）。
+- **刪論文級聯**：掛 2 份 SI 後 `DELETE /api/papers/:id` → `si-*` 2→0、正文 PDF 12→11、`paper_attachments` 0 列，日誌 `[SI] delete paper=… files=2（隨論文刪除）`。
+
+**我補的兩個小修（本附錄同一個 commit）**
+1. SI 工具列的「刪除」→「刪除這份」（＋title「只刪這份補充文件，不動論文」）、確認文案寫明「這份補充文件」——頁首還有一顆刪**整篇論文**的「刪除」，兩顆長一樣太容易點錯。
+2. `PaperDetail` 換論文時先 `setAttachments([])`，免得上一篇的 SI chips 閃一下、手快點到 404。
+
+**我認可的偏離**：附錄 A 五條全部認可（報告併入本檔、worktree、`planSiBudget` 提前、清單撈在 PaperDetail、10 份上限整批拒絕）。
+**已知、不修**：正文上傳（`papers.js`）的 `originalname` 同樣是 latin1 亂碼，但它**只進 `app.log` 和一個前端不讀的回應欄位**（papers 表不存原始檔名、標題由通讀產生、上傳進度列用的是瀏覽器端 `f.name`）——對她零可見影響，不為此另開工單。B6.6 的 `LENGTH()` vs `.length` 單位差：只在 SI 含 astral 字元且剛好壓在截斷線時讓「AI 讀了幾字」差個位數，送出去的字以 JS `slice` 為準，不修。
+**還沒做**：合 main（＝她的 `node --watch` 會自動重啟並在真庫建新表）與 build 進主樹 `dist/`——等她點頭，合之前先 `.backup` 真庫、確認沒有 in-flight 的 `[CHAT]`／`[ANALYZE]`。
