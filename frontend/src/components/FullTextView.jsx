@@ -25,6 +25,11 @@ const MODE_KEY = 'co-reading:fulltext-mode';
 // 下限，其餘交給 flex-1 貼合可用高度，檢視器的兩條捲軸就都留在看得到的地方。
 const PDF_FRAME_MIN_HEIGHT = 240;
 
+// 工單 26 §D4：文字版不再是「一坨貼在框裡的字」——給它一張自己會捲的卡，
+// 內文 620px 行寬、serif 14.5px／1.75。PDF 那邊維持原樣（框裡的東西我們碰不到）。
+const TEXT_CARD = 'flex-1 min-h-0 overflow-auto border border-border rounded-lg bg-surface';
+const TEXT_CARD_STYLE = { padding: '22px 26px' };
+
 function loadMode() {
   try {
     return localStorage.getItem(MODE_KEY) === 'text' ? 'text' : 'pdf';
@@ -110,9 +115,11 @@ function TextBody({ paper, paragraphs }) {
   const narrow = typeof window !== 'undefined' && window.innerWidth < 640;
 
   return (
-    <div className="cr-fulltext-body" ref={rootRef}>
+    /* 工單 26 §D4：捲動交給外面那張卡了（--flow 把這裡的 flex/overflow 關掉）。
+       data-cr-offset／選段／跳回的機制一個字沒動，只換樣式 class。 */
+    <div className="cr-fulltext-body cr-fulltext-body--flow" ref={rootRef}>
       <div
-        className="text-left space-y-3"
+        className="text-left space-y-3.5"
         onMouseUp={captureSelection}
         onTouchEnd={captureSelection}
       >
@@ -121,7 +128,7 @@ function TextBody({ paper, paragraphs }) {
             key={para.start}
             ref={el => { paraRefs.current[i] = el; }}
             {...{ [OFFSET_ATTR]: String(para.start) }}
-            className={`cr-serif text-[13.5px] text-text leading-relaxed whitespace-pre-wrap${
+            className={`cr-serif text-[14.5px] leading-[1.75] text-text whitespace-pre-wrap${
               flash?.idx === i ? ' cr-quote-flash' : ''
             }`}
           >
@@ -158,14 +165,14 @@ function AttachmentTextBody({ text }) {
   );
 
   if (paragraphs.length === 0) {
-    return <p className="text-center py-12 text-faint text-sm">這份補充文件沒有抽到文字</p>;
+    return <p className="py-12 text-faint text-sm">這份補充文件沒有抽到文字</p>;
   }
 
   return (
-    <div className="cr-fulltext-body">
-      <div className="text-left space-y-3">
+    <div className="cr-fulltext-body cr-fulltext-body--flow">
+      <div className="text-left space-y-3.5">
         {paragraphs.map((para, i) => (
-          <p key={i} className="cr-serif text-[13.5px] text-text leading-relaxed whitespace-pre-wrap">
+          <p key={i} className="cr-serif text-[14.5px] leading-[1.75] text-text whitespace-pre-wrap">
             {para}
           </p>
         ))}
@@ -174,82 +181,36 @@ function AttachmentTextBody({ text }) {
   );
 }
 
-/** 選到 SI 時 chips 底下那一行小工具列：字數／AI 讀得到／改名／刪除。 */
-function AttachmentToolbar({ item, onPatch, onDelete, busy }) {
-  const [renaming, setRenaming] = useState(false);
-  const [draft, setDraft] = useState(item.label);
-  const [confirming, setConfirming] = useState(false);
-
-  // 換一份 SI 就把編輯狀態收掉，免得把 A 的名字寫到 B 上
-  useEffect(() => {
-    setRenaming(false);
-    setConfirming(false);
-    setDraft(item.label);
-  }, [item.id, item.label]);
-
-  const commit = () => {
-    const next = draft.trim();
-    setRenaming(false);
-    if (next && next !== item.label) onPatch({ label: next });
-    else setDraft(item.label);
-  };
-
-  // AI 到底讀到多少——工單 §七：畫面不能說有、AI 其實沒讀
-  let aiNote = null;
-  if (!item.ai_visible) aiNote = null;
-  else if (!item.has_text) aiNote = '掃描版，AI 讀不到文字';
-  else if (item.dropped) aiNote = '超出預算，AI 沒讀到';
-  else if (item.truncated) aiNote = `AI 只讀前 ${item.ai_chars_sent.toLocaleString('en-US')} 字`;
-
-  return (
-    <div className="flex items-center flex-wrap gap-x-3 gap-y-1 justify-center mb-2 text-[11.5px] text-muted shrink-0">
-      {/* 工單 24b：chip 上只剩「SI N」，這份叫什麼名字寫在這裡 */}
-      <span className="text-text-strong font-medium truncate max-w-[16rem]" title={item.original_name}>{item.label}</span>
-      <span className="text-faint">{item.chars.toLocaleString('en-US')} 字</span>
-
-      <label className="flex items-center gap-1 cursor-pointer">
-        <input
-          type="checkbox"
-          className="accent-current"
-          checked={!!item.ai_visible}
-          disabled={busy}
-          onChange={e => onPatch({ ai_visible: e.target.checked })}
-        />
-        AI 讀得到
-      </label>
-
-      {aiNote && <span className="text-faint">（{aiNote}）</span>}
-
-      {renaming ? (
-        <input
-          autoFocus
-          className="text-[11.5px] border border-border bg-surface rounded px-1.5 py-0.5 w-40 focus:outline-none focus:border-accent"
-          value={draft}
-          maxLength={120}
-          onChange={e => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={e => {
-            if (e.key === 'Enter') { e.preventDefault(); commit(); }
-            if (e.key === 'Escape') { e.preventDefault(); setDraft(item.label); setRenaming(false); }
-          }}
-        />
-      ) : (
-        <button className="hover:text-accent" disabled={busy} onClick={() => setRenaming(true)}>改名</button>
-      )}
-
-      {confirming ? (
-        <span className="flex items-center gap-1.5">
-          <span className="text-faint">確定刪除這份補充文件？</span>
-          <button className="text-danger hover:underline" disabled={busy} onClick={() => { setConfirming(false); onDelete(); }}>刪除</button>
-          <button className="hover:text-accent" onClick={() => setConfirming(false)}>取消</button>
-        </span>
-      ) : (
-        // 頁首還有一顆刪「整篇論文」的「刪除」——這顆要講清楚刪的只是這份 SI。
-        <button className="hover:text-danger" disabled={busy} title="只刪這份補充文件，不動論文" onClick={() => setConfirming(true)}>刪除這份</button>
-      )}
-    </div>
-  );
+/**
+ * AI 到底讀到這份多少（工單 24 §七的紅線：畫面不能說有、AI 其實沒讀）。
+ * `full` ＝「勾了、而且真的整份讀進去了」——只有這種情況眼睛才是全不透明的。
+ */
+function aiTruth(item) {
+  if (!item || !item.ai_visible) return { note: null, full: false };
+  if (!item.has_text) return { note: '掃描版，AI 讀不到文字', full: false };
+  if (item.dropped) return { note: '超出預算，AI 沒讀到', full: false };
+  if (item.truncated) return { note: `AI 只讀前 ${(item.ai_chars_sent || 0).toLocaleString('en-US')} 字`, full: false };
+  return { note: null, full: true };
 }
+
+function eyeTitle(item) {
+  if (!item.ai_visible) return 'AI 讀不到這份（點擊開啟）';
+  const { note } = aiTruth(item);
+  return note ? `${note}（點擊關閉）` : 'AI 讀得到這份（點擊關閉）';
+}
+
+const EyeOn = (
+  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <path d="M1.6 8s2.4-4 6.4-4 6.4 4 6.4 4-2.4 4-6.4 4-6.4-4-6.4-4z" />
+    <circle cx="8" cy="8" r="1.7" />
+  </svg>
+);
+const EyeOff = (
+  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <path d="M1.6 8s2.4-4 6.4-4 6.4 4 6.4 4-2.4 4-6.4 4-6.4-4-6.4-4z" />
+    <path d="M2.5 2.5l11 11" />
+  </svg>
+);
 
 export default function FullTextView({ paper, attachments = [], onAttachmentsChange, controlsSlot = null }) {
   const hasPdf = !!paper.pdf_filename;
@@ -264,6 +225,12 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
   const [error, setError] = useState('');
   const fileInputRef = useRef(null);
   const pendingJump = useStore(s => s.quoteJump);
+  // 工單 26 §D4：SI 的小工具列收進膠囊本身 ＋ 一顆 ⋯ 選單（檔名／AI 讀得到／改名／刪除）
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [confirming, setConfirming] = useState(false);
+  const groupRef = useRef(null);
 
   const paragraphs = useMemo(() => buildParagraphs(paper.full_text), [paper.full_text]);
   const selected = selectedId ? attachments.find(a => a.id === selectedId) || null : null;
@@ -343,6 +310,41 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
     setBusy(false);
   };
 
+  // 換一份 SI／關掉選單就把編輯狀態收乾淨，免得把 A 的名字寫到 B 上
+  useEffect(() => {
+    setMenuOpen(false);
+    setRenaming(false);
+    setConfirming(false);
+  }, [selectedId]);
+  useEffect(() => {
+    if (!menuOpen) { setRenaming(false); setConfirming(false); }
+  }, [menuOpen]);
+
+  // 點外面／Escape 關選單。**Escape 是這裡的保命索**：選單蓋在 PDF iframe 上時，
+  // 指標落在 iframe 裡的那一下 mousedown document 收不到（事件被 iframe 吃掉），
+  // 只靠點外面關不掉。listener 一律在關掉／unmount 時拆。
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e) => {
+      // 用整個膠囊組當界線：只檢查選單本身的話，再點一次 ⋯ 會「先關後開」而關不掉。
+      if (!groupRef.current?.contains(e.target)) setMenuOpen(false);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menuOpen]);
+
+  const commitRename = () => {
+    if (!selected) return;
+    const next = draft.trim();
+    setRenaming(false);
+    if (next && next !== selected.label) patchSelected({ label: next });
+  };
+
   const addButton = (
     <>
       <input
@@ -358,13 +360,19 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
         }}
       />
       <button
-        className="text-[11.5px] px-2 py-1 rounded-full text-faint hover:text-accent transition-colors disabled:opacity-60 whitespace-nowrap"
+        className={attachments.length === 0
+          ? 'text-[11.5px] px-2 py-1 rounded-full text-faint hover:text-accent transition-colors disabled:opacity-60 whitespace-nowrap'
+          : 'w-[22px] h-[22px] shrink-0 flex items-center justify-center rounded-full border border-border text-muted hover:bg-surface-hover hover:text-text-strong transition-colors disabled:opacity-60'}
         disabled={uploading}
         title="加一份補充文件（SI，PDF）"
         onClick={() => fileInputRef.current?.click()}
       >
-        {/* 已經有 SI 時縮成一顆「＋」：這一排住在分頁列裡，寸土寸金 */}
-        {uploading ? '上傳中…' : attachments.length === 0 ? '＋ 補充文件' : '＋'}
+        {/* 已經有 SI 時縮成一顆圓形「＋」：這一排住在工作列裡，寸土寸金 */}
+        {uploading
+          ? (attachments.length === 0 ? '上傳中…' : <svg className="cr-spin" width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M8 1.6a6.4 6.4 0 1 0 6.4 6.4" /></svg>)
+          : attachments.length === 0
+            ? '＋ 補充文件'
+            : <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M8 3v10M3 8h10" /></svg>}
       </button>
     </>
   );
@@ -374,22 +382,152 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
     : 'text-muted hover:text-accent'
   }`;
 
-  // 文件切換：正文｜SI 1｜SI 2…。chip 上只寫「SI N」，名字放 title（滑過去看得到），
-  // 選中之後下面那行小工具列開頭會寫全名。一份 SI 都沒有時只露一顆淡色「＋ 補充文件」。
+  const menuRow = 'block w-full text-left text-[12px] px-[9px] py-1.5 rounded-md hover:bg-surface-hover transition-colors disabled:opacity-60';
+  const selectedTruth = aiTruth(selected);
+
+  // 文件切換：正文｜SI 1｜SI 2…。**選中的 SI 膠囊就地展開**（工單 26 §D4）：
+  //   SI 1 ｜ 16,680 字 ｜ 👁 ｜ ⋯
+  // 整整省下原本那一行小工具列的 24px，而且只在選到 SI 時才變長。
+  // 外層改用 div（role=button）：按鈕裡不能再塞按鈕，眼睛與 ⋯ 都是可點的。
   const docSwitch = attachments.length === 0 ? addButton : (
     <>
-      <div className="inline-flex items-center rounded-full border border-border p-0.5 bg-surface">
+      <div ref={groupRef} className="relative inline-flex items-center rounded-full border border-border p-0.5 bg-surface">
         <button className={pill(selectedId === null)} onClick={() => setSelectedId(null)}>正文</button>
-        {attachments.map((a, i) => (
-          <button
-            key={a.id}
-            className={pill(selectedId === a.id)}
-            title={`${a.label}（${a.original_name}）`}
-            onClick={() => setSelectedId(a.id)}
-          >
-            SI {i + 1}
-          </button>
-        ))}
+        {attachments.map((a, i) => {
+          const active = selectedId === a.id;
+          const truth = aiTruth(a);
+          return (
+            <div
+              key={a.id}
+              role="button"
+              tabIndex={0}
+              className={`${pill(active)} flex items-center gap-[5px] cursor-pointer`}
+              title={`${a.label}（${a.original_name}）`}
+              onClick={() => setSelectedId(a.id)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedId(a.id); }
+              }}
+            >
+              <span>SI {i + 1}</span>
+              {active && (
+                <span
+                  className="flex items-center gap-[5px] pl-[5px]"
+                  // 選中時底是 accent、字是 accent-fg，分隔線跟著 currentColor 走半透明，
+                  // 亮／深兩套都成立（寫死白色在深色模式會刺眼）
+                  style={{ borderLeft: '1px solid color-mix(in srgb, currentColor 35%, transparent)' }}
+                >
+                  <span className="cr-mono text-[10px] opacity-85">{a.chars.toLocaleString('en-US')} 字</span>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    title={eyeTitle(a)}
+                    className="flex items-center"
+                    // 勾了但沒真的讀到（截斷／擠掉／掃描版）也是半透明——畫面不能說有、AI 其實沒讀
+                    style={{ opacity: truth.full ? 1 : 0.55 }}
+                    onClick={e => { e.stopPropagation(); if (!busy) patchSelected({ ai_visible: !a.ai_visible }); }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault(); e.stopPropagation();
+                        if (!busy) patchSelected({ ai_visible: !a.ai_visible });
+                      }
+                    }}
+                  >
+                    {a.ai_visible ? EyeOn : EyeOff}
+                  </span>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    title="更多：改名、刪除"
+                    className="flex items-center leading-none text-[12px] tracking-[1px]"
+                    onClick={e => { e.stopPropagation(); setMenuOpen(o => !o); }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault(); e.stopPropagation(); setMenuOpen(o => !o);
+                      }
+                    }}
+                  >
+                    ⋯
+                  </span>
+                </span>
+              )}
+            </div>
+          );
+        })}
+
+        {menuOpen && selected && (
+          <div className="absolute right-0 top-[calc(100%+6px)] z-[60] min-w-[186px] bg-surface border border-border rounded-[10px] shadow-md p-1">
+            <div className="cr-mono text-[10.5px] text-faint px-[9px] pt-[5px] pb-1 break-all" title={selected.original_name}>
+              {selected.original_name}
+            </div>
+            <button
+              className={`${menuRow} flex items-center justify-between gap-2`}
+              disabled={busy}
+              onClick={() => patchSelected({ ai_visible: !selected.ai_visible })}
+            >
+              <span>AI 讀得到</span>
+              <span className={`text-[11px] ${selected.ai_visible ? 'text-accent' : 'text-faint'}`}>
+                {selected.ai_visible ? '開啟' : '關閉'}
+              </span>
+            </button>
+            {selectedTruth.note && (
+              <div className="px-[9px] pb-1.5 text-[10.5px] text-faint leading-snug">{selectedTruth.note}</div>
+            )}
+
+            {renaming ? (
+              <div className="px-[5px] py-1">
+                <input
+                  autoFocus
+                  className="w-full text-[12px] border border-border bg-surface rounded px-1.5 py-1 focus:outline-none focus:border-accent"
+                  value={draft}
+                  maxLength={120}
+                  onChange={e => setDraft(e.target.value)}
+                  onBlur={commitRename}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
+                    // 這一下 Escape 是「取消改名」，不是關選單——別讓它冒到 document 那顆
+                    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setRenaming(false); }
+                  }}
+                />
+              </div>
+            ) : (
+              <button
+                className={menuRow}
+                disabled={busy}
+                onClick={() => { setDraft(selected.label); setRenaming(true); }}
+              >
+                改名
+              </button>
+            )}
+
+            {confirming ? (
+              /* 頂列還有一顆刪「整篇論文」的垃圾桶——這裡要講清楚刪的只是這份 SI */
+              <div className="px-[9px] py-1.5">
+                <div className="text-[10.5px] text-faint mb-1">確定刪除這份補充文件？不動論文。</div>
+                <div className="flex items-center gap-3">
+                  <button
+                    className="text-[11.5px] text-danger hover:underline disabled:opacity-60"
+                    disabled={busy}
+                    onClick={() => { setConfirming(false); setMenuOpen(false); deleteSelected(); }}
+                  >
+                    刪除
+                  </button>
+                  <button className="text-[11.5px] text-muted hover:text-accent" onClick={() => setConfirming(false)}>
+                    取消
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                className={`${menuRow} text-danger`}
+                disabled={busy}
+                title="只刪這份補充文件，不動論文"
+                onClick={() => setConfirming(true)}
+              >
+                刪除這份
+              </button>
+            )}
+          </div>
+        )}
       </div>
       {addButton}
     </>
@@ -429,27 +567,29 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
     return (
       <div className="flex flex-col h-full">
         {controls}
-        <AttachmentToolbar item={selected} onPatch={patchSelected} onDelete={deleteSelected} busy={busy} />
         {errorLine}
         {activeMode === 'pdf' ? (
           <>
             <iframe
               key={selected.id}   /* 換一份就換一個 iframe，免得殘留上一份 */
               src={attachmentsApi.fileUrl(paper.id, selected.id)}
-              className="flex-1 w-full border border-border rounded-lg bg-surface"
+              className="flex-1 min-h-0 w-full border border-border rounded-lg bg-surface"
               title={selected.label}
               style={{ minHeight: PDF_FRAME_MIN_HEIGHT }}
             />
           </>
         ) : (
-          <>
-            <p className="text-xs text-faint text-center mb-3">
-              補充文件的文字版（SI 文字版暫不支援選段提問）
-            </p>
-            {siTextLoading
-              ? <p className="text-center py-12 text-faint text-sm">讀取中…</p>
-              : <AttachmentTextBody text={siText} />}
-          </>
+          /* 工單 26 §D4：文字版給真排版——外框卡自己捲、內文 620px 行寬 */
+          <div className={TEXT_CARD} style={TEXT_CARD_STYLE}>
+            <div className="max-w-[620px]">
+              <p className="text-xs text-faint mb-4">
+                補充文件的文字版（SI 文字版暫不支援選段提問）
+              </p>
+              {siTextLoading
+                ? <p className="py-12 text-faint text-sm">讀取中…</p>
+                : <AttachmentTextBody text={siText} />}
+            </div>
+          </div>
         )}
       </div>
     );
@@ -463,7 +603,7 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
         {errorLine}
         <iframe
           src={`/api/papers/${paper.id}/pdf`}
-          className="flex-1 w-full border border-border rounded-lg bg-surface"
+          className="flex-1 min-h-0 w-full border border-border rounded-lg bg-surface"
           title="論文原文"
           style={{ minHeight: PDF_FRAME_MIN_HEIGHT }}
         />
@@ -490,12 +630,17 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
     <div className="flex flex-col h-full">
       {controls}
       {errorLine}
-      <p className="text-xs text-faint text-center mb-3">
-        {hasPdf
-          ? `提取的文字版（選取 ${MIN_SELECTION_CHARS} 字以上會浮出「問這段」）`
-          : `原始 PDF 檔案不可用，僅能顯示提取的文字（選取 ${MIN_SELECTION_CHARS} 字以上可直接提問）`}
-      </p>
-      <TextBody paper={paper} paragraphs={paragraphs} />
+      {/* 工單 26 §D4：原本頂上那行說明小字搬進卡內第一行，卡自己捲動 */}
+      <div className={TEXT_CARD} style={TEXT_CARD_STYLE}>
+        <div className="max-w-[620px]">
+          <p className="text-xs text-faint mb-4">
+            {hasPdf
+              ? `提取的文字版（選取 ${MIN_SELECTION_CHARS} 字以上會浮出「問這段」）`
+              : `原始 PDF 檔案不可用，僅能顯示提取的文字（選取 ${MIN_SELECTION_CHARS} 字以上可直接提問）`}
+          </p>
+          <TextBody paper={paper} paragraphs={paragraphs} />
+        </div>
+      </div>
     </div>
   );
 }

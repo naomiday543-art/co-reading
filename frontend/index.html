@@ -273,6 +273,10 @@
       /* 文字版閱讀：段落是選取 → 偏移的錨點，樣式不改動文字本身（偏移以原文為準） */
       .cr-fulltext-body { position: relative; flex: 1; min-height: 0; overflow-y: auto; }
       .cr-fulltext-body p::selection { background: var(--accent-soft); color: var(--text-strong); }
+      /* 工單 26 §D4：文字版改成「外框卡自己捲」之後，段落這一層不再是捲動容器
+         （不關掉的話會變成卡裡再套一層捲軸）。跳回原文的 scrollIntoView 會自己往上
+         找最近的可捲動祖先＝那張卡，行為不變。 */
+      .cr-fulltext-body--flow { flex: none; min-height: 0; overflow: visible; }
 
       /* 選取旁浮出的「問這段」 */
       .cr-ask-selection {
