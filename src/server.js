@@ -12,6 +12,7 @@ import directionsRouter from './routes/directions.js';
 import insightsRouter from './routes/insights.js';
 import activityRouter from './routes/activity.js';
 import compareRouter from './routes/compare.js';
+import attachmentsRouter from './routes/attachments.js';
 import { getSetting, setSetting, getSettings } from './db.js';
 import { dataPaths } from './paths.js';
 
@@ -27,6 +28,9 @@ app.use(express.json());
 // API routes
 app.use('/api/papers', papersRouter);
 app.use('/api/papers', chatRouter);
+// 補充文件／SI（工單 24 §D2）。掛完整前綴＋mergeParams，`req.params.id` 就是論文 id。
+// 兩段路徑吃不到 papersRouter 的 `/:id`（那只配單一路段），順序無所謂。
+app.use('/api/papers/:id/attachments', attachmentsRouter);
 app.use('/api', tagsRouter);
 app.use('/api', treeRouter);
 // 研究進度圖的唯讀代理（工單 21 §三 B1）。掛 /api，路徑是 /directions/:nodeId/progress。

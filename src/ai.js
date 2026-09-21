@@ -762,6 +762,70 @@ export function resolvePaperFulltextLimit() {
   return clampNumber(n, { min: 20_000, max: 2_000_000, fallback: 250_000 });
 }
 
+/**
+ * 送進模型的補充文件（SI）**合計**字數上限（工單 24 §D3）。
+ *
+ * 跟全文上限分開一顆旋鈕：正文吃 25 萬字的時候再掛滿 SI，小窗口的線會爆。
+ * 預設 100,000 字 ≈ 26,000 token。寫法沿用 `resolvePaperFulltextLimit()`
+ * （每次呼叫重讀 env，改 .env 重啟即生效，測試也不必重新 import）。
+ *
+ * **`0` 是有意義的值＝整個 SI 注入關掉**（討論 system 連區塊都不會有），
+ * 所以這裡不能照抄全文那顆「`<= 0` 退回預設」的分支。空／非數字才退回預設。
+ */
+export function resolvePaperSiLimit() {
+  const raw = process.env.PAPER_SI_LIMIT_CHARS;
+  if (raw === undefined || raw === null || `${raw}`.trim() === '') return 100_000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 100_000;
+  return clampNumber(n, { min: 0, max: 1_000_000, fallback: 100_000 });
+}
+
+/**
+ * 「這一篇的 SI，AI 實際會讀到哪幾份、各幾個字」——**唯一一顆預算函式**。
+ *
+ * `renderSiBlock`（真的送出去的字）與 `GET /api/papers/:id/attachments`（畫面上說的字）
+ * 都必須走這裡，否則 UI 說的和實際送的會漂移——工單 24 §七 要求把「AI 實際讀到幾字」
+ * 攤開給她看，攤開的數字自己對不上就沒有意義了。純函式，不查庫。
+ *
+ * 依序填、填滿就截：前面的份吃掉預算，後面的份只剩標題行。
+ *
+ * @param {{id: string, chars?: number, ai_visible?: number|boolean}[]} attachments
+ *        已依 `sort_order, created_at` 排好序
+ * @param {number} limit 合計字數預算（`resolvePaperSiLimit()`）
+ * @returns {{ plan: Map<string, {sent: number, truncated: boolean, dropped: boolean,
+ *             scanned: boolean, hidden: boolean}>, visible: number, totalSent: number }}
+ */
+export function planSiBudget(attachments, limit) {
+  const plan = new Map();
+  let remaining = Number.isFinite(limit) ? Math.max(0, limit) : 0;
+  let visible = 0;
+  let totalSent = 0;
+
+  for (const a of attachments || []) {
+    const chars = Number(a.chars) || 0;
+    if (!a.ai_visible) {
+      plan.set(a.id, { sent: 0, truncated: false, dropped: false, scanned: chars === 0, hidden: true });
+      continue;
+    }
+    visible += 1;
+    // 掃描版（抽不到字）不佔預算，但仍然要讓模型知道「有這份、你讀不到」。
+    if (chars === 0) {
+      plan.set(a.id, { sent: 0, truncated: false, dropped: false, scanned: true, hidden: false });
+      continue;
+    }
+    if (remaining <= 0) {
+      plan.set(a.id, { sent: 0, truncated: false, dropped: true, scanned: false, hidden: false });
+      continue;
+    }
+    const sent = Math.min(chars, remaining);
+    remaining -= sent;
+    totalSent += sent;
+    plan.set(a.id, { sent, truncated: sent < chars, dropped: false, scanned: false, hidden: false });
+  }
+
+  return { plan, visible, totalSent };
+}
+
 function httpStatusOf(message) {
   const m = /^API error (\d{3})\b/.exec(message || '');
   return m ? Number(m[1]) : null;

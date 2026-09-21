@@ -106,6 +106,29 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_sec_paper ON section_progress(paper_id, section_order);
 
+  -- 補充文件／SI（工單 24 §D1）。一篇論文可以掛多份 supplementary PDF。
+  --
+  -- **papers.full_text 一個字不碰**：SI 的文字另存這一欄，永不拼進全文——工單 14 的
+  -- 選段引用是以 full_text 的絕對偏移為準（每次送出與回放都重驗 slice），而且
+  -- pdf.js 把 "Supplementary information" 當參考文獻區塊的終點標題，拼進去會亂切。
+  -- 磁碟檔與正文 PDF 同住 dataPaths.pdfDir（si- 前綴）：零新路徑、既有備份天然涵蓋。
+  -- extracted_text 空字串 ＝ 掃描版抽不到字（仍可看 PDF，只是 AI 讀不到）。
+  CREATE TABLE IF NOT EXISTS paper_attachments (
+    id              TEXT PRIMARY KEY,
+    paper_id        TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    kind            TEXT NOT NULL DEFAULT 'si',
+    label           TEXT NOT NULL DEFAULT '',
+    original_name   TEXT NOT NULL DEFAULT '',
+    filename        TEXT NOT NULL,
+    mime            TEXT NOT NULL DEFAULT 'application/pdf',
+    size_bytes      INTEGER NOT NULL DEFAULT 0,
+    extracted_text  TEXT NOT NULL DEFAULT '',
+    ai_visible      INTEGER NOT NULL DEFAULT 1,
+    sort_order      INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_paper_attachments_paper ON paper_attachments(paper_id, sort_order);
+
   -- FTS5 trigram search for insights (Chinese + English mixed text)
   CREATE VIRTUAL TABLE IF NOT EXISTS insights_fts USING fts5(
     title, content, source_context,
