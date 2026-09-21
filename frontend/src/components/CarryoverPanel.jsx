@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { papersApi } from '../api';
 import OriginBadge from './OriginBadge';
 import ProvenanceModal from './ProvenanceModal';
@@ -39,7 +40,10 @@ function Section({ title, items, conflict, onProvenance }) {
   );
 }
 
-export default function CarryoverPanel({ paperId, messageCount }) {
+// headContainer（工單 26 §D5）：ChatPanel 那顆「穩定容器」。有值就把**觸發列**
+// portal 進去（它住在跨欄工作列的右半／閱讀模式時的抽屜頭部），卡片／錯誤／溯源彈窗
+// 留在原地。state、effect、API 呼叫一行都沒改——精煉要跑一分鐘，這顆元件不能重掛。
+export default function CarryoverPanel({ paperId, messageCount, headContainer = null }) {
   const [carryover, setCarryover] = useState(null);
   const [injected, setInjected] = useState(false);
   const [refining, setRefining] = useState(false);
@@ -95,52 +99,59 @@ export default function CarryoverPanel({ paperId, messageCount }) {
 
   const c = carryover;
 
-  return (
-    <div className="mb-3">
-      {/* 觸發列：精煉按鈕 + 帶上開關 */}
-      <div className="flex items-center gap-2 flex-wrap">
+  // 觸發列（三個動作都要留、都要能按，工單 26 §三）。order 讓它在頭部那一排排成
+  // 討論(0) → 精煉／帶上(1) → 提取洞察(2) → 研究續窗 meta(3)；沒 portal 時 order
+  // 在原本那個 flex 容器裡也成立，相對次序一樣。
+  const triggerRow = (
+    <>
+      <button
+        className="cr-chip shrink-0"
+        style={{ order: 1 }}
+        onClick={() => handleRefine()}
+        disabled={refining || (messageCount ?? 0) < 2}
+        title={meta.scope === 'direction' && meta.direction
+          ? `把本次共讀精煉成結構化研究狀態，餵進「${meta.direction.name}」這條研究線（跨論文累積）。可能需要一分鐘。`
+          : '把本次共讀精煉成結構化研究狀態（研究問題/假設/證據/衝突），存在 research-gateway。可能需要一分鐘。'}
+      >
+        {refining ? '… 精煉中' : '✦ 精煉本次共讀'}
+      </button>
+      {c && (
         <button
-          className="text-xs text-muted hover:text-accent flex items-center gap-1 px-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          onClick={() => handleRefine()}
-          disabled={refining || (messageCount ?? 0) < 2}
-          title={meta.scope === 'direction' && meta.direction
-            ? `把本次共讀精煉成結構化研究狀態，餵進「${meta.direction.name}」這條研究線（跨論文累積）`
-            : '把本次共讀精煉成結構化研究狀態（研究問題/假設/證據/衝突），存在 research-gateway'}
+          className={`cr-chip shrink-0${injected ? ' cr-chip--on' : ''}`}
+          style={{ order: 1 }}
+          onClick={handleToggleInject}
+          title="把 carryover 摘要注入後續對話（手動，預設關）"
         >
-          {refining ? '… 精煉中（可能需要一分鐘）' : '✦ 精煉本次共讀'}
+          {injected ? '✓ 已帶上' : '帶上'}
         </button>
-        {c && (
-          <button
-            className={`text-xs px-1.5 py-0.5 rounded-md border transition-colors ${injected
-              ? 'border-accent text-accent'
-              : 'border-border text-muted hover:text-accent'}`}
-            onClick={handleToggleInject}
-            title="把 carryover 摘要注入後續對話（手動，預設關）"
-          >
-            {injected ? '✓ 已帶上' : '帶上'}
-          </button>
-        )}
-        {c && (
-          <button
-            className="text-xs text-faint hover:text-accent transition-colors"
-            onClick={() => setExpanded(!expanded)}
-            title={meta.scope === 'direction'
-              ? '這條線上累積的是整個方向底下所有論文的研究狀態'
-              : '這篇還沒掛到任何方向，續窗只累積這一篇'}
-          >
-            {expanded ? '收起' : lineLabel}
-          </button>
-        )}
-        {!c && meta.scope === 'direction' && meta.direction && (
-          <span
-            className="text-xs text-faint"
-            title="這篇還沒精煉過；按下去會餵進這個方向的研究線（跨論文累積）"
-          >
-            → 方向：{meta.direction.name}
-          </span>
-        )}
-      </div>
+      )}
+      {c && (
+        <button
+          className="cr-chat-head-meta"
+          style={{ order: 3 }}
+          onClick={() => setExpanded(!expanded)}
+          title={meta.scope === 'direction'
+            ? '這條線上累積的是整個方向底下所有論文的研究狀態'
+            : '這篇還沒掛到任何方向，續窗只累積這一篇'}
+        >
+          {expanded ? '收起' : lineLabel}
+        </button>
+      )}
+      {!c && meta.scope === 'direction' && meta.direction && (
+        <span
+          className="cr-chat-head-meta"
+          style={{ order: 3 }}
+          title="這篇還沒精煉過；按下去會餵進這個方向的研究線（跨論文累積）"
+        >
+          → 方向：{meta.direction.name}
+        </span>
+      )}
+    </>
+  );
 
+  // 留在原地的那些：stale 提示、錯誤、carryover 卡、溯源彈窗
+  const body = (
+    <>
       {/* 對話改過了：只提示，不自動重跑（她 9/18 拍板的手動型） */}
       {stale && (
         <div className="flex items-center gap-2 flex-wrap mt-1">
@@ -185,6 +196,26 @@ export default function CarryoverPanel({ paperId, messageCount }) {
       {provClaimId && (
         <ProvenanceModal paperId={paperId} claimId={provClaimId} onClose={() => setProvClaimId(null)} />
       )}
+    </>
+  );
+
+  // 觸發列搬走之後，沒內容的時候就別再留一條 12px 的空白在討論區頂上
+  const hasBody = stale || !!error || (c && expanded);
+
+  if (headContainer) {
+    return (
+      <>
+        {createPortal(triggerRow, headContainer)}
+        <div className={hasBody ? 'mb-3' : ''}>{body}</div>
+      </>
+    );
+  }
+
+  // 拿不到頭部容器（別處單獨用這個元件）：照舊整塊畫在原地，功能一顆不少
+  return (
+    <div className="mb-3">
+      <div className="flex items-center gap-2 flex-wrap">{triggerRow}</div>
+      {body}
     </div>
   );
 }

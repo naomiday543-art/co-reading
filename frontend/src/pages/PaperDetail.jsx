@@ -756,6 +756,7 @@ export default function PaperDetail({ paperId, onBack, onNavigate, headerMainSlo
           <ChatPanel
             paperId={paperId}
             paper={paper}
+            chatHeadSlot={chatHeadSlot}
             onMessagesUpdated={handleMessagesUpdated}
             onSaveInsight={(msg) => {
               setInsightSeed({ source_paper_id: paperId, source_message_id: msg?.id || '' });
