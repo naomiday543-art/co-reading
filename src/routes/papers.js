@@ -10,6 +10,7 @@ import { log } from '../logger.js';
 import { extractInsights } from '../memory.js';
 import { requestRefine, fetchCarryover, fetchClaimProvenance, getCachedCarryover, resolveSessionKey, refineStaleness, isCarryoverInjected, setCarryoverInjected } from '../carryover.js';
 import { dataPaths } from '../paths.js';
+import { unlinkAttachmentsOfPaper } from './attachments.js';
 
 const router = Router();
 
@@ -319,6 +320,10 @@ router.delete('/:id', (req, res) => {
       if (existsSync(pdfPath)) unlinkSync(pdfPath);
     } catch {}
   }
+
+  // 補充文件的磁碟檔（工單 24 §D2）：**一定要在 DELETE 之前撈**——FK CASCADE
+  // 帶走列之後就再也查不到 filename 了，那些 `si-*.pdf` 會變成孤兒檔。
+  unlinkAttachmentsOfPaper(req.params.id);
 
   db.prepare('DELETE FROM papers WHERE id = ?').run(req.params.id);
   log('INFO', `論文已刪除: ${req.params.id}`);

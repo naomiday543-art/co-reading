@@ -103,7 +103,7 @@ co-reading/
 │       ├── ChatPanel.jsx           # 含 regenerate / edit / branch UI
 │       ├── SummaryView.jsx         # 結構化摘要展示
 │       ├── InsightsPanel.jsx, InsightCard.jsx, InsightForm.jsx
-│       ├── FullTextView.jsx        # 原文閱讀 + annotation
+│       ├── FullTextView.jsx        # 原文閱讀 + annotation + 補充文件（SI）切換（工單 24）
 │       ├── Sidebar.jsx, TreeNode.jsx
 │       ├── PaperCard.jsx, TagBadge.jsx
 │       └── UploadZone.jsx
@@ -137,6 +137,26 @@ co-reading/
 | `analyze_error` | TEXT | 失敗訊息 |
 | `text_meta` | TEXT | 抽字後設資料 JSON（工單 13／16）：`{version, references:{cut, blocks:[{start,end,chars,heading,density,reason}], chars_total, start, end, chars, reason, heading, density}, pages:[{n,chars,lines,single_char_line_ratio,nonword_ratio,avg_line_len,rotated_hint,quality,reasons}], bad_pages:[n]}`。`references.start/end/chars` ＝**最大那一塊**（向後相容），合計看 `chars_total`。**推導資料**，空字串＝還沒算；`version < TEXT_META_VERSION`（現為 2）時 `GET /api/papers/:id` 會自動重算參考文獻那半（頁級品質沿用舊值）；隨時可 `POST /api/papers/:id/text-meta/rebuild` 全部重算 |
 | `created_at`, `updated_at` | INT | ms timestamp |
+
+### 5.1b `paper_attachments` — 補充文件／SI（工單 24）
+
+一篇論文可以掛多份 supplementary PDF。磁碟檔與正文 PDF 同住 `data/pdfs/`，檔名 `si-<nanoid>.pdf`（`si-` 前綴＝零新路徑，既有備份天然涵蓋）。
+
+| 欄位 | 類型 | 說明 |
+|------|------|------|
+| `id` | TEXT PK | nanoid |
+| `paper_id` | FK → papers (CASCADE) | 刪論文時列自動消失；**磁碟檔由 `DELETE /api/papers/:id` 手動 unlink**（CASCADE 帶不走檔案） |
+| `kind` | TEXT | 目前固定 `si` |
+| `label` | TEXT | 她看到的名字；預設＝原始檔名去副檔名，可改（≤120 字） |
+| `original_name` | TEXT | 原始檔名（含中文）。**只進 DB 與編碼後的 header，不進磁碟路徑** |
+| `filename` | TEXT | 磁碟檔名 `si-<nanoid>.pdf` |
+| `mime`, `size_bytes` | | 目前只收 `application/pdf`、50MB 上限、每篇最多 10 份 |
+| `extracted_text` | TEXT | 抽出的文字；**空字串＝掃描版**（仍可看 PDF，AI 讀不到字） |
+| `ai_visible` | INT | 1／0；0 ＝這份不進討論的 system |
+| `sort_order` | INT | 顯示與吃預算的順序 |
+| `created_at` | TEXT | `datetime('now')` |
+
+🔴 **SI 的文字永遠不拼進 `papers.full_text`**：工單 14 的選段引用是以 `full_text` 的絕對偏移為準（每次送出與回放都重驗 `full_text.slice(start,end) === text`），而且 `src/pdf.js` 把 "Supplementary information" 當參考文獻區塊的終點標題，拼進去會讓切除邏輯亂切。
 
 ### 5.2 `messages` — 討論訊息
 
@@ -307,11 +327,30 @@ CREATE VIRTUAL TABLE insights_fts USING fts5(
 | GET | `/api/papers` | 列表，支援 `?status`, `?tag`, `?tree_node_id` (`__none` 為未分類), `?q`, `?sort=title\|created\|updated` |
 | GET | `/api/papers/:id` | 含 tags、tree_node、`full_text_chars` / `full_text_truncated` / `full_text_limit`（工單 12 §3.5）、`text_meta`（工單 13／16；沒算過、或版本落後於 `TEXT_META_VERSION` 會當場重算並回寫） |
 | PATCH | `/api/papers/:id` | 部分更新（白名單：title, authors, year, doi, status, notes, tree_node_id） |
-| DELETE | `/api/papers/:id` | 連帶刪除 PDF 檔案，message / annotation / section_progress 透過 FK CASCADE 一併刪 |
+| DELETE | `/api/papers/:id` | 連帶刪除 PDF 檔案**與該篇所有補充文件的磁碟檔**（工單 24；FK CASCADE 帶得走列、帶不走檔案），message / annotation / section_progress / paper_attachments 透過 FK CASCADE 一併刪 |
 | GET | `/api/papers/:id/pdf` | 串流原始 PDF |
 | POST | `/api/papers/:id/analyze` | 觸發（或重跑）通讀 |
 | POST | `/api/papers/:id/text-meta/rebuild` | 重算 `text_meta`（參考文獻位置＋重新解析 PDF 取頁級品質） |
 | POST | `/api/papers/:id/extract-insights` | 從討論提取洞察 |
+
+### 7.1b 補充文件／SI（工單 24）
+
+掛在 `/api/papers/:id/attachments`（`src/routes/attachments.js`）。**所有 `:aid` 一律 `WHERE id = ? AND paper_id = ?` 查——拿別篇論文的 aid 進來一律 404。**
+
+| Method | Path | 說明 |
+|--------|------|------|
+| GET | `/api/papers/:id/attachments` | 列表。**不含 `extracted_text`**；每份帶 `chars` / `has_text` / `ai_visible` / `ai_chars_sent` / `truncated` / `dropped`，整包帶 `si_limit` / `si_chars_sent` |
+| POST | `/api/papers/:id/attachments` | multipart，欄位名 `files`，可多檔。只收 `.pdf` **且** `application/pdf`（其餘 400 並刪掉落盤的暫存檔）；50MB／每篇 10 份。掃描版不算錯（`extracted_text=''` 照樣入庫）。**不觸發通讀、不動 `papers` 任何欄位**。回 `{attachments, created, failed}`——某一份抽字失敗只列進 `failed`，不讓整批 500 |
+| GET | `/api/papers/:id/attachments/:aid/file` | 串流原檔。`Content-Disposition: inline; filename*=UTF-8''<編碼後原名>`（**中文檔名絕不裸進 header**） |
+| GET | `/api/papers/:id/attachments/:aid/text` | `{ text }`（文字版用；列表不背全文） |
+| PATCH | `/api/papers/:id/attachments/:aid` | 只准改 `label`（trim、≤120）、`ai_visible`（0/1）、`sort_order`。回整份新列表 |
+| DELETE | `/api/papers/:id/attachments/:aid` | 先刪磁碟檔再刪列。回整份新列表 |
+
+**AI 怎麼讀得到**（`src/ai.js`）：`buildSiContext()` / `renderSiBlock(paperId)` 取 `ai_visible=1` 的，依 `sort_order, created_at` **合計**吃一份預算（`PAPER_SI_LIMIT_CHARS`），填滿就截、後面的份只剩標題行。區塊接在 **論文區塊 → SI 區塊 → 方向區塊**，同一個 cache block、不另開 `cache_control`（掛／卸 SI、開關 `ai_visible` 會讓這篇的 prompt cache 冷一次，設計如此）。**沒有任何可見 SI 時區塊是空字串、連換行都不加**，討論 system 與工單 24 之前逐字相同（釘在 `test/fixtures/chat-system-no-directions.json`）。**SI 絕不進變動區 `insightText`**——那樣每輪白付一次 SI 的 token。
+
+預算只有**一顆函式** `planSiBudget()`：列表端點的 `ai_chars_sent` / `truncated` 與 `renderSiBlock` 真正送出去的字共用它，畫面說的和實際送的不會漂移。觀察哨：`[CHAT] start` 那行的 `si=<可見份數>/<實際送出字數>`。
+
+**目前不做**（工單 24 §六）：SI 文字版的「問這段」、docx／xlsx、通讀摘要吃 SI、SI 圖表走 vision、SI 全文搜尋。
 
 ### 7.2 對話（SSE）
 
@@ -503,6 +542,9 @@ ANALYZE_FORMAT=openai
 PAPER_FULLTEXT_LIMIT_CHARS=250000
 # 送模型前切掉參考文獻區塊（預設開；papers.full_text 原文不動）
 CUT_REFERENCES=true
+# 送進討論的補充文件（SI）**合計**字數上限（工單 24）。預設 100000 字 ≈ 26000 token；
+# clamp [0, 1000000]，**0 ＝ 整個 SI 注入關掉**（正文照舊）。只影響討論線，不影響通讀。
+PAPER_SI_LIMIT_CHARS=100000
 
 PORT=3456
 ```
@@ -596,6 +638,10 @@ DB `settings` 表 > 環境變量。Settings 頁面修改會即時生效，無需
   - branch/switch happy path + 404
   - regenerate 無 AI 消息 400
   - `switchVersion` 純函數 6 case
+- 補充文件／SI（工單 24）：
+  - [test/attachments.test.js](test/attachments.test.js)：子路由實打（真伺服器＋真 multer＋真抽字，走 temp dataDir）——上傳／列表／取檔 header／取文字／PATCH／DELETE、非 PDF 與第 11 份的清檔、刪論文帶走磁碟檔、別篇 aid 一律 404
+  - [test/si-block.test.js](test/si-block.test.js)：`renderSiBlock` 的四種標註與預算截斷，**零回歸釘在 `test/fixtures/chat-system-no-directions.json`**（無 SI／全關／env=0 時 system 逐字不變）
+  - 測試用 PDF 是手寫的（[test/fixtures/make-pdf.js](test/fixtures/make-pdf.js)，沒裝新套件）。🔴 `padTo=8192` 是必要的：pdf-parse 綁的 pdf.js v1.10.100 在 `XRef.fetchUncompressed()` 走 `this.bytes.buffer` 的**絕對偏移**，而 Node 對小於 4KB 的檔案回的是共用 pool 上的 Buffer（`byteOffset !== 0`），偏移就落到 pool 裡別人的位元組上，報 `bad XRef entry`
 - 擴充建議：洞察提取的 happy path、跨論文檢索的 FTS5 fallback、settings 寫入後的 config 生效
 
 ---
