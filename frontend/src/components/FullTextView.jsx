@@ -403,7 +403,8 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
     <div className="inline-flex rounded-full border border-border p-0.5 bg-surface">
       {[
         ['pdf', 'PDF 原檔', '看原始 PDF 的版面'],
-        ['text', '文字版', selected ? '抽取出來的文字' : '抽取出來的文字——選取後可以直接「問這段」'],
+        // PDF 框下面原本各有一行提示小字，工單 25 附錄 B 收掉了（那 26px 還給 PDF）——說明都搬到這裡
+        ['text', '文字版', selected ? '抽取出來的文字（SI 文字版暫不支援選段提問）' : '想選一段直接問 AI？切到這裡，選取後會浮出「問這段」'],
       ].map(([key, label, tip]) => (
         <button key={key} className={pill(activeMode === key)} title={tip} onClick={() => switchMode(key)}>
           {label}
@@ -439,11 +440,6 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
               title={selected.label}
               style={{ minHeight: PDF_FRAME_MIN_HEIGHT }}
             />
-            <p className="text-xs text-faint mt-2 text-center">
-              {selected.has_text
-                ? '補充文件的原檔；切到「文字版」看抽取出來的文字'
-                : '這份補充文件抽不到文字（可能是掃描版），只能看原檔'}
-            </p>
           </>
         ) : (
           <>
@@ -471,11 +467,6 @@ export default function FullTextView({ paper, attachments = [], onAttachmentsCha
           title="論文原文"
           style={{ minHeight: PDF_FRAME_MIN_HEIGHT }}
         />
-        <p className="text-xs text-faint mt-2 text-center">
-          {hasText
-            ? '想選一段直接問 AI？切到「文字版」，選取後會浮出「問這段」'
-            : '選中文字後，複製貼到右側聊天框即可問 AI'}
-        </p>
       </div>
     );
   }
