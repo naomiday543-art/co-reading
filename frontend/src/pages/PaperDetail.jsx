@@ -27,6 +27,11 @@ const SPLIT_MAX = 70;
 // 左欄只有半個視窗時放不下 ⇒ 檢視器整頁多出一條橫向捲軸（她兩張截圖量出來都是「還差一成寬」）。
 // 多給左欄 8% 就夠；她自己拖過的位置（localStorage）永遠優先。
 const SPLIT_DEFAULT = 58;
+// 工單 26 §D3：全頁 10px 節奏。工作列與分欄區左右都是這個值，兩者的「切點」才在同一條
+// 垂直線上；拖曳算百分比時也要把它扣掉（基準＝content box）。
+const SPLIT_PAD = 10;
+// 左右欄之間的中縫（工作列與分欄區共用同一個值）
+const SPLIT_GAP = 6;
 
 function loadSplit() {
   try {
@@ -60,8 +65,13 @@ export default function PaperDetail({ paperId, onBack, onNavigate, headerMainSlo
   // 工單 24 §D4：補充文件清單。撈在這一層，「原文」tab 的標籤才知道有幾份。
   const [attachments, setAttachments] = useState([]);
   // 工單 24b：分頁列右側的插槽（DOM node）。用 state 存、不用 useRef——節點就位要觸發重渲染，
-  // FullTextView 才拿得到它去 createPortal。
+  // FullTextView 才拿得到它去 createPortal。工單 26 §D2 之後這格住在跨欄工作列的左半。
   const [controlsSlot, setControlsSlot] = useState(null);
+  // 工單 26 §D2：工作列右半＝右欄的標頭（「討論」那一行）。同上，ChatPanel 拿它去 portal。
+  // 閱讀模式下右半不渲染 ⇒ 這裡變回 null，ChatPanel 自己退回內部的頭部容器。
+  const [chatHeadSlot, setChatHeadSlot] = useState(null);
+  // 分隔線 hover（工單 26 §D3：靜止安靜、hover／拖曳才變強調色）
+  const [splitHover, setSplitHover] = useState(false);
   const [tagInput, setTagInput] = useState('');
   const [tagSuggestions, setTagSuggestions] = useState([]);
   const [showTagSuggest, setShowTagSuggest] = useState(false);
@@ -217,6 +227,7 @@ export default function PaperDetail({ paperId, onBack, onNavigate, headerMainSlo
 
   // Split dragging — uses an overlay to prevent iframe from stealing mouseup
   const [isDragging, setIsDragging] = useState(false);
+  const splitActive = splitHover || isDragging;
   // 雙擊分隔線＝還原。不能用 onDoubleClick：第一下 mousedown 就會蓋上一層全螢幕遮罩
   // （防 iframe 偷走 mouseup），第二下 click 落在遮罩上，瀏覽器不會對握把發 dblclick。
   // 所以在 mousedown 自己量兩下的間隔。
@@ -242,9 +253,12 @@ export default function PaperDetail({ paperId, onBack, onNavigate, headerMainSlo
     const onMove = (e) => {
       // 左欄的 `width: N%` 是相對於分欄容器，不是整個視窗——原本用 clientX / innerWidth 算，
       // 側欄開著（容器左邊多 250px）時分隔線完全不跟手。改成以容器自己的位置與寬度為基準。
+      // 工單 26 §D3：容器現在自己帶 10px padding，百分比的基準是 **content box**，
+      // 不是 border box——用 border box 算，拖到底時分隔線會跟工作列的切點差 10px。
       const box = splitBoxRef.current?.getBoundingClientRect();
-      const pct = box && box.width > 0
-        ? ((e.clientX - box.left) / box.width) * 100
+      const inner = box ? box.width - SPLIT_PAD * 2 : 0;
+      const pct = box && inner > 0
+        ? ((e.clientX - box.left - SPLIT_PAD) / inner) * 100
         : (e.clientX / window.innerWidth) * 100;
       const next = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, pct));
       splitRef.current = next;
@@ -438,38 +452,74 @@ export default function PaperDetail({ paperId, onBack, onNavigate, headerMainSlo
         </div>
       )}
 
-      {/* Split content */}
-      <div ref={splitBoxRef} className="cr-detail-split flex flex-1 overflow-hidden gap-0 min-h-0">
-        {/* Left: Summary / Fulltext tabs */}
-        <div className="cr-detail-pane flex flex-col overflow-hidden" style={{ width: readingMode ? '100%' : `${split}%` }}>
-          {/* Tab bar */}
-          <div className="flex flex-wrap-reverse items-end border-b border-border-soft mb-3 shrink-0">
+      {/* 工單 26 §D2：跨兩欄的工作列（36px）。用分隔線的 x 把它切成兩半——左半是分頁＋
+          膠囊組（原本住在左欄裡的那一列），右半**直接就是右欄的標頭**，右欄因此少掉兩行。
+          左右 padding 與下面的分欄區同為 10px、中縫同為 6px，切點才對得齊。 */}
+      <div
+        className="cr-workbar shrink-0"
+        style={{
+          display: 'flex',
+          alignItems: 'stretch',
+          padding: `0 ${SPLIT_PAD}px`,
+          borderBottom: '1px solid var(--border-soft)',
+          minHeight: 36,
+          position: 'relative',
+          zIndex: 20,   // 膠囊的 ⋯ 選單要壓得過下面那片 PDF iframe
+        }}
+      >
+        <div
+          className="cr-workbar-left flex flex-wrap-reverse items-center justify-between gap-x-2.5 gap-y-1 min-w-0"
+          style={{ width: readingMode ? '100%' : `${split}%`, paddingRight: 8 }}
+        >
+          <div className="flex items-stretch self-stretch gap-3.5 shrink-0">
             <button
-              className={`text-[13px] px-3 py-2 border-b-2 -mb-px transition-colors whitespace-nowrap shrink-0 ${leftTab === 'summary' ? 'border-accent text-accent font-medium' : 'border-transparent text-muted hover:text-text-strong'}`}
+              className={`text-[13px] flex items-center whitespace-nowrap shrink-0 border-b-2 transition-colors ${leftTab === 'summary' ? 'border-accent text-accent font-medium' : 'border-transparent text-muted hover:text-text-strong'}`}
+              style={{ minHeight: 35, padding: '0 1px' }}
               onClick={() => setLeftTab('summary')}
             >
               AI 摘要
             </button>
             <button
-              className={`text-[13px] px-3 py-2 border-b-2 -mb-px transition-colors whitespace-nowrap shrink-0 ${leftTab === 'fulltext' ? 'border-accent text-accent font-medium' : 'border-transparent text-muted hover:text-text-strong'}`}
+              className={`text-[13px] flex items-center whitespace-nowrap shrink-0 border-b-2 transition-colors ${leftTab === 'fulltext' ? 'border-accent text-accent font-medium' : 'border-transparent text-muted hover:text-text-strong'}`}
+              style={{ minHeight: 35, padding: '0 1px' }}
               onClick={() => setLeftTab('fulltext')}
             >
               原文{attachments.length > 0 && (
                 <span className="text-[11px] text-faint ml-1">· SI {attachments.length}</span>
               )}
             </button>
-            {/* 工單 24b：原文分頁的「正文｜SI…｜＋」與「PDF 原檔｜文字版」收在這一行右側
-                （FullTextView 用 portal 畫進來）——她嫌那兩排佔地方，要把高度還給 PDF。
-                摘要分頁時這格是空的。pr-4 對齊下面內容區的右內距。
-                左欄被拖得很窄、一行放不下時：分頁列用 wrap-reverse，這格**整塊**換到上面一行，
-                兩顆分頁仍留在底行貼著底線（不會被擠成三行）。 */}
-            <div
-              ref={setControlsSlot}
-              className="ml-auto flex items-center flex-wrap justify-end gap-1.5 min-w-0 max-w-full pl-2 pr-4 py-1"
-            />
           </div>
+          {/* 工單 24b：原文分頁的「正文｜SI…｜＋」與「PDF 原檔｜文字版」收在這一格
+              （FullTextView 用 portal 畫進來）。摘要分頁時這格是空的。
+              左半被拖得很窄、一行放不下時：wrap-reverse 讓這格**整塊**換到分頁上方一行，
+              兩顆分頁仍留在底行貼著底線（不會被擠成三行）——行為與工單 24b 相同。 */}
+          <div
+            ref={setControlsSlot}
+            className="flex items-center flex-wrap justify-end gap-1.5 min-w-0 max-w-full shrink-0"
+            style={{ padding: '3px 0' }}
+          />
+        </div>
+        {!readingMode && <div className="shrink-0" style={{ width: SPLIT_GAP }} />}
+        {/* 右半＝「討論」標頭（ChatPanel portal 進來）。閱讀模式下右欄是浮動抽屜，
+            這半邊不渲染，標頭自己退回抽屜內部的頭部容器。 */}
+        {!readingMode && (
+          <div
+            ref={setChatHeadSlot}
+            className="cr-workbar-right flex-1 min-w-0 flex items-center"
+            style={{ paddingLeft: 8 }}
+          />
+        )}
+      </div>
 
-          <div className="overflow-y-auto pr-4 flex-1">
+      {/* Split content */}
+      <div
+        ref={splitBoxRef}
+        className="cr-detail-split flex flex-1 overflow-hidden gap-0 min-h-0"
+        style={{ padding: SPLIT_PAD }}
+      >
+        {/* Left: Summary / Fulltext */}
+        <div className="cr-detail-pane flex flex-col overflow-hidden min-h-0" style={{ width: readingMode ? '100%' : `${split}%` }}>
+          <div className="overflow-y-auto pr-2 flex-1 min-h-0">
           {leftTab === 'summary' ? (
             <>
             {/* 工單 12 §3.5：AI 只讀得到前 N 字，超過的部分她有權知道 */}
@@ -634,15 +684,46 @@ export default function PaperDetail({ paperId, onBack, onNavigate, headerMainSlo
           </div>
         </div>
 
-        {/* Split handle — 閱讀模式下不渲染 */}
+        {/* Split handle — 閱讀模式下不渲染。
+            工單 26 §D3：靜止時安靜（1px 直線＋40px 握把），hover／拖曳才變強調色並長到
+            64px；真正加強的是命中範圍——左右各外擴 5px 的透明層（實際可抓 16px）。
+            那一層是握把的子元素，mousedown 照樣冒泡上來，雙擊還原不受影響。 */}
         {!readingMode && (
           <div
-            className="cr-split-handle group relative w-1.5 bg-border-soft hover:bg-accent-soft cursor-col-resize shrink-0 rounded-full my-4 transition-colors"
+            className="cr-split-handle shrink-0"
             title="拖曳調整左右寬度（會記住位置）· 雙擊還原"
             onMouseDown={handleMouseDown}
+            style={{
+              width: SPLIT_GAP,
+              cursor: 'col-resize',
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: splitActive ? 'var(--accent-soft)' : 'transparent',
+              transition: 'background 0.15s',
+            }}
           >
-            {/* 中間一小段深一點的握把：原本整條跟背景幾乎同色，她根本不知道這裡能拖 */}
-            <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-10 rounded-full bg-faint opacity-40 group-hover:opacity-100 group-hover:bg-accent transition" />
+            <span
+              className="pointer-events-none"
+              style={{
+                position: 'absolute', top: 0, bottom: 0, left: 2.5, width: 1,
+                background: splitActive ? 'transparent' : 'var(--border)',
+              }}
+            />
+            <span
+              className="pointer-events-none"
+              style={{
+                position: 'relative', width: 4, height: splitActive ? 64 : 40, borderRadius: 3,
+                background: splitActive ? 'var(--accent)' : 'var(--faint)',
+                transition: 'height 0.15s, background 0.15s',
+              }}
+            />
+            <span
+              style={{ position: 'absolute', top: 0, bottom: 0, left: -5, right: -5 }}
+              onMouseEnter={() => setSplitHover(true)}
+              onMouseLeave={() => setSplitHover(false)}
+            />
           </div>
         )}
 
@@ -653,8 +734,8 @@ export default function PaperDetail({ paperId, onBack, onNavigate, headerMainSlo
         <div
           className={readingMode
             ? `cr-chat-drawer${drawerOpen ? ' cr-chat-drawer--open' : ''}`
-            : 'cr-detail-pane overflow-y-auto pl-4 flex flex-col min-h-0'}
-          style={readingMode ? { width: `${drawerWidth}px` } : { width: `${100 - split}%` }}
+            : 'cr-detail-pane overflow-y-auto pl-2 flex flex-col flex-1 min-w-0 min-h-0'}
+          style={readingMode ? { width: `${drawerWidth}px` } : undefined}
         >
           {readingMode && (
             <>
