@@ -16,6 +16,25 @@ const DRAWER_MIN = 320;
 const DRAWER_MAX = 720;
 const DRAWER_DEFAULT = 420;
 
+// 分欄模式左右兩欄的分隔線位置（工單 25 附錄 A）。原本每次進論文都回到 50%——
+// 她的 PDF 檢視器工具列比半個視窗寬，左欄太窄時檢視器底下會多一條橫向捲軸，
+// 每次都要重拖一遍分隔線。拖一次就記住。範圍與拖曳時的夾限一致（30–70%）。
+const SPLIT_KEY = 'co-reading:detail-split';
+const SPLIT_MIN = 30;
+const SPLIT_MAX = 70;
+const SPLIT_DEFAULT = 50;
+
+function loadSplit() {
+  try {
+    const raw = localStorage.getItem(SPLIT_KEY);
+    if (raw === null) return SPLIT_DEFAULT;
+    const n = Number(raw);
+    return n >= SPLIT_MIN && n <= SPLIT_MAX ? n : SPLIT_DEFAULT;
+  } catch {
+    return SPLIT_DEFAULT;
+  }
+}
+
 function loadDrawerWidth() {
   try {
     const n = Number(localStorage.getItem(DRAWER_WIDTH_KEY));
@@ -28,7 +47,8 @@ function loadDrawerWidth() {
 export default function PaperDetail({ paperId, onBack, onNavigate }) {
   const [paper, setPaper] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [split, setSplit] = useState(50);
+  const [split, setSplit] = useState(loadSplit);
+  const splitRef = useRef(split);
   // 'summary' | 'fulltext'——閱讀模式下刷新回來也該是 PDF，不是摘要
   const [leftTab, setLeftTab] = useState(() => (useStore.getState().readingMode ? 'fulltext' : 'summary'));
   const [statusMenu, setStatusMenu] = useState(false);
@@ -180,9 +200,15 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
     if (!isDragging) return;
     const onMove = (e) => {
       const pct = (e.clientX / window.innerWidth) * 100;
-      setSplit(Math.min(70, Math.max(30, pct)));
+      const next = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, pct));
+      splitRef.current = next;
+      setSplit(next);
     };
-    const onUp = () => { setIsDragging(false); };
+    const onUp = () => {
+      setIsDragging(false);
+      // 放手才存（不要每個 mousemove 都寫 localStorage）；存一位小數就夠
+      try { localStorage.setItem(SPLIT_KEY, String(Math.round(splitRef.current * 10) / 10)); } catch {}
+    };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => {
