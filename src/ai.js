@@ -1321,6 +1321,81 @@ AI 摘要：
 ${fullText}${qualityNote ? `\n\n${qualityNote}` : ''}`;
 }
 
+/**
+ * 補充文件（SI）區塊 ＋ 給 log 用的中繼資料（工單 24 §D3）。
+ *
+ * 只取 `ai_visible = 1` 的，依 `sort_order, created_at` **合計**吃一份預算，
+ * 填滿就截；後面的份只剩標題行。預算怎麼分完全交給 `planSiBudget()`
+ * ——那是列表端點也在用的同一顆函式，畫面說的字數與這裡真的送出去的字數不會漂移。
+ *
+ * **不對 SI 跑 `stripReferences`**：SI 裡的「References」多半是正文引用的延伸，
+ * 而且 SI 沒有 `text_meta`，切參考文獻的那套偵測在這裡沒有依據。
+ *
+ * 沒有任何可見 SI（或 env 關掉）時回空字串——注入點連一個換行都不會多（§四 紅線 2）。
+ *
+ * @param {string} paperId
+ * @returns {{ block: string, count: number, chars: number }}
+ *          count ＝ 可見份數（含掃描版與被預算擠掉的），chars ＝ 真的送出去的字數
+ */
+export function buildSiContext(paperId) {
+  try {
+    const limit = resolvePaperSiLimit();
+    // 0 ＝ 整個 SI 注入關掉（連「有這些份但你讀不到」都不說）。
+    if (limit <= 0) return { block: '', count: 0, chars: 0 };
+
+    const rows = db.prepare(
+      `SELECT id, label, extracted_text FROM paper_attachments
+       WHERE paper_id = ? AND ai_visible = 1
+       ORDER BY sort_order, created_at, id`
+    ).all(paperId);
+    if (rows.length === 0) return { block: '', count: 0, chars: 0 };
+
+    const items = rows.map(r => ({
+      id: r.id,
+      label: r.label,
+      text: r.extracted_text || '',
+      chars: (r.extracted_text || '').length,
+      ai_visible: 1,
+    }));
+    const { plan, visible, totalSent } = planSiBudget(items, limit);
+
+    const parts = [
+      `以下是這篇論文的補充材料（Supplementary Information，共 ${visible} 份）。`
+      + '回答用到時請說明出自哪一份 SI；沒列在這裡的補充材料你讀不到，不要推測。',
+    ];
+
+    items.forEach((item, i) => {
+      const p = plan.get(item.id);
+      const head = `【SI ${i + 1}：${item.label}】`;
+      if (p.scanned) {
+        parts.push(`${head}（掃描版，抽不到文字——這份你讀不到）`);
+      } else if (p.dropped) {
+        parts.push(`${head}（超出字數預算，這份沒給你）`);
+      } else if (p.truncated) {
+        parts.push(`${head}（只給了前 ${p.sent.toLocaleString('en-US')} 字，`
+          + `全長 ${item.chars.toLocaleString('en-US')} 字）\n${item.text.slice(0, p.sent)}`);
+      } else {
+        parts.push(`${head}\n${item.text}`);
+      }
+    });
+
+    return { block: parts.join('\n\n'), count: visible, chars: totalSent };
+  } catch (err) {
+    // 跟方向區塊同一條規矩：SI 區塊壞掉絕不能讓討論掛掉——退回「什麼都不注入」。
+    log('ERROR', `[SI] 區塊組裝失敗，這輪不注入: ${err.message}`);
+    return { block: '', count: 0, chars: 0 };
+  }
+}
+
+/**
+ * 注入用的 SI 區塊；沒有任何可見 SI 回 ''（紅線：注入點不得多一個換行）。
+ * @param {string} paperId
+ * @returns {string}
+ */
+export function renderSiBlock(paperId) {
+  return buildSiContext(paperId).block;
+}
+
 // system 的穩定前綴 = 憲章（單獨一個 cache block，永遠最前）+ 論文區塊（第二個 cache block）。
 // 換論文不打掉憲章緩存；改憲章只冷一次。變動區（洞察/續窗）由呼叫端接在後面。
 //
@@ -1328,11 +1403,17 @@ ${fullText}${qualityNote ? `\n\n${qualityNote}` : ''}`;
 // 不另開 cache_control：方向很少變，冷一次可接受。沒有任何方向時區塊是空字串，
 // 這裡連換行都不加 ⇒ 輸出與工單 07 之前逐字相同（§5 零回歸線）。
 // directionsBlock 可由呼叫端傳入（討論線已經為了 log 查過一次，不用再查）。
-export function buildChatSystem(paper, { constitution, format, directionsBlock }) {
+//
+// 補充文件區塊（工單 24 §D3）接在**論文區塊與方向區塊之間**，一樣不另開 cache_control：
+// 掛／卸 SI、開關 ai_visible 會讓這篇的 prompt cache 冷一次，設計如此（工單 §七）。
+// 沒有任何可見 SI 時同樣是空字串、連換行都不加 ⇒ 輸出與工單 24 之前逐字相同。
+// siBlock 可由呼叫端傳入（討論線已經為了 log 查過一次，不用再查）。
+export function buildChatSystem(paper, { constitution, format, directionsBlock, siBlock }) {
   const directions = directionsBlock === undefined ? renderDirectionsBlock(paper.id) : directionsBlock;
-  const paperBlock = directions
-    ? `${buildPaperBlock(paper)}\n\n${directions}`
-    : buildPaperBlock(paper);
+  const si = siBlock === undefined ? renderSiBlock(paper.id) : siBlock;
+  let paperBlock = buildPaperBlock(paper);
+  if (si) paperBlock += `\n\n${si}`;
+  if (directions) paperBlock += `\n\n${directions}`;
   if (format === 'anthropic') {
     return [
       { type: 'text', text: constitution, cache_control: { type: 'ephemeral' } },
@@ -1389,10 +1470,15 @@ export async function chatAboutPaper(paper, history, userMessage, onChunk, optio
   const directions = buildDirectionsContext(paper.id);
   log('INFO', `[DIRECTIONS] paper=${paper.id} direction=${directions.directionName || 'none'} total=${directions.total}`);
 
+  // SI 區塊查一次：一份給 system，一份給 log（工單 24 §D3——觀察哨要看得見
+  // 「這輪到底餵了幾份、幾個字」，那是她判斷要不要調 PAPER_SI_LIMIT_CHARS 的依據）。
+  const si = buildSiContext(paper.id);
+
   const stableSystem = buildChatSystem(paper, {
     constitution,
     format: config.format,
     directionsBlock: directions.block,
+    siBlock: si.block,
   });
 
   // 工單 14 §3.2：這一輪的選段（自己送的，或重新生成／繼續時沿用上一則 user 的）。
@@ -1502,7 +1588,7 @@ export async function chatAboutPaper(paper, history, userMessage, onChunk, optio
 
   log('INFO', `[CHAT] start paper=${paper.id} model=${config.model}`
     + ` sys_chars=${systemChars(systemForRequest)} hist=${history.length}條 scope=${scope}`
-    + ` quote=${quoteLogLabel(quote)}`);
+    + ` quote=${quoteLogLabel(quote)} si=${si.count}/${si.chars}`);
 
   let lastError = null;
   let retriesUsed = 0;
