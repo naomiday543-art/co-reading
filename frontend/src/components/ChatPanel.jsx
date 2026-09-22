@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { streamChat, regenerateChat, continueChat, papersApi } from '../api';
@@ -38,7 +39,7 @@ export function switchVersion(messages, messageId, direction) {
   });
 }
 
-export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveInsight }) {
+export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveInsight, chatHeadSlot = null }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -75,6 +76,26 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
   const branchDropdownRef = useRef(null);
+
+  // ── 討論欄的頭（工單 26 §D5）─────────────────────────────────────
+  // 「討論」標頭／精煉三個動作／提取洞察要搬到跨欄工作列的右半；閱讀模式下那一半
+  // 不存在，就退回抽屜裡的 fallback 容器。
+  //
+  // 🔴 不能直接把 createPortal 的目標從 A 換成 B：換目標＝React 卸載整棵子樹再重掛，
+  // CarryoverPanel 的 refining（精煉要跑一分鐘）會在她切閱讀模式的那一瞬間人間蒸發。
+  // 作法＝頭部內容永遠 portal 進**同一顆**手工建的 div，再用一顆 layout effect 把這顆
+  // **DOM 節點**搬到當前目標底下。搬 DOM 節點不會重掛 React 子樹，state 一個都不掉。
+  const headBoxRef = useRef(null);
+  if (headBoxRef.current === null && typeof document !== 'undefined') {
+    headBoxRef.current = document.createElement('div');
+    headBoxRef.current.className = 'cr-chat-head';
+  }
+  const headFallbackRef = useRef(null);
+  useLayoutEffect(() => {
+    const box = headBoxRef.current;
+    const target = chatHeadSlot || headFallbackRef.current;
+    if (box && target && box.parentNode !== target) target.appendChild(box);
+  }, [chatHeadSlot]);
 
   useEffect(() => {
     loadMessages();
@@ -378,13 +399,37 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
 
   return (
     <div className="flex flex-col h-full" style={{ '--chat-fs': CHAT_FONT_PX[chatFontSize] }}>
-      <h3 className="cr-serif text-sm font-semibold text-text-strong mb-2 flex items-center gap-2">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="text-accent"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
-        討論
-      </h3>
+      {/* 頭部內容的**唯一**歸宿是 headBoxRef 那顆 div；它掛在工作列右半還是這顆
+          fallback 容器底下，由上面那顆 layout effect 決定。order 控制左右次序：
+          討論(0) → 精煉／帶上(1) → 提取洞察(2) → 研究續窗 meta(3)。 */}
+      <div ref={headFallbackRef} className={chatHeadSlot ? 'hidden' : 'shrink-0 mb-2'} />
+      {headBoxRef.current && createPortal(
+        <>
+          <span className="flex items-center gap-[5px] text-[13px] font-semibold text-text-strong whitespace-nowrap shrink-0" style={{ order: 0 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="text-accent"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+            討論
+          </span>
+          {/* 提取洞察：出現條件（至少兩條訊息）、extracting 狀態、handleExtract 一律沒動，
+              只是從輸入框下方升到這一排；結果提示留在輸入卡上方。 */}
+          {messages.length >= 2 && (
+            <button
+              className="cr-chip shrink-0"
+              style={{ order: 2 }}
+              onClick={handleExtract}
+              disabled={extracting}
+              title="從討論中自動提取洞察"
+            >
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 13h4M6.5 10.6a4 4 0 113 0z" /></svg>
+              {extracting ? '… 提取中' : '提取洞察'}
+            </button>
+          )}
+        </>,
+        headBoxRef.current,
+      )}
 
-      {/* 研究續窗：精煉按鈕 + carryover 卡片（手動觸發/手動帶上，拍板 #1/#3） */}
-      <CarryoverPanel paperId={paperId} messageCount={messages.length} />
+      {/* 研究續窗：精煉按鈕 + carryover 卡片（手動觸發/手動帶上，拍板 #1/#3）。
+          觸發列自己 portal 進上面那顆頭部容器，卡片／錯誤／溯源彈窗留在這裡。 */}
+      <CarryoverPanel paperId={paperId} messageCount={messages.length} headContainer={headBoxRef.current} />
 
       {/* Messages */}
       <div
@@ -681,6 +726,18 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
 
       {/* Input */}
       <div className="shrink-0 space-y-1.5">
+        {/* 工單 08 §3.5：三段各自 >0 才顯示；三段都是 0 時也要給一句回音，
+            不然按了「提取洞察」之後畫面什麼都不變，看起來像壞了。
+            工單 26 §D5：鈕升到頭部，這句回音留在輸入卡上方（暫時性出現）。 */}
+        {extractResult && (
+          <div className="text-xs text-fact px-1">
+            {[
+              extractResult.insights.length > 0 && `新增 ${extractResult.insights.length} 條洞察`,
+              extractResult.skipped > 0 && `${extractResult.skipped} 條進度已跳過`,
+              extractResult.duplicates > 0 && `${extractResult.duplicates} 條與既有洞察重複已略過`,
+            ].filter(Boolean).join('；') || '沒有新的洞察'}
+          </div>
+        )}
         {/* 引用卡（工單 14 §3.3）：她在閱讀模式選了一段按「問這段」之後停在這裡，
             ✕ 取消。送出時跟著走，DB 裡另存 quote 欄，不混進她打的字。 */}
         {pendingQuote && (
@@ -700,10 +757,12 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
             </button>
           </div>
         )}
-        <div className="flex gap-2">
+        {/* 工單 26 §D5：輸入卡——無邊框 textarea ＋ 卡內底排（貼上原文提問／Aa／送出）。
+            自動增高、Enter 送出、IME、disabled 的行為一個字沒改，只是換了殼。 */}
+        <div className="cr-chat-inputcard">
           <textarea
             ref={inputRef}
-            className="cr-chat-input flex-1 border border-border bg-surface rounded-2xl px-4 py-2.5 resize-none shadow-sm focus:outline-none focus:border-accent"
+            className="cr-chat-input cr-chat-input--bare"
             rows={2}
             placeholder={pendingQuote
               ? (pendingQuote.source === 'message'
@@ -715,77 +774,52 @@ export default function ChatPanel({ paperId, paper, onMessagesUpdated, onSaveIns
             onKeyDown={handleKeyDown}
             disabled={streaming}
           />
-          {streaming ? (
-            /* 工單 12 §3.4②：等了 10–17 秒又不想等的時候，她本來只能關頁面。
-               按下去 fetch 被 abort ⇒ 後端 res 'close' ⇒ 上游那條也收掉，不繼續燒。 */
+          <div className="flex items-center gap-2.5 mt-1">
             <button
-              className="cr-chat-stop-btn px-4 py-2 bg-surface border border-border text-text rounded-xl text-sm font-medium hover:bg-surface-hover shrink-0"
-              onClick={handleStop}
+              className="text-[11.5px] text-faint hover:text-text-strong flex items-center gap-1 py-0.5 transition-colors shrink-0"
+              onClick={async () => {
+                try {
+                  const text = await navigator.clipboard.readText();
+                  if (text.trim()) {
+                    setInput(prev => prev + (prev ? '\n\n' : '') + `關於這段原文：\n「${text.trim()}」\n\n`);
+                    inputRef.current?.focus();
+                  }
+                } catch {
+                  setInput(prev => prev + (prev ? '\n\n' : '') + '關於這段原文：\n「」\n\n');
+                  inputRef.current?.focus();
+                }
+              }}
+              title="從 PDF 複製文字後，點這裡貼入"
             >
-              停止
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"><path d="M5.5 2.5h5v2h-5zM4 3.5H3v10h10v-10h-1" /></svg>
+              貼上原文提問
             </button>
-          ) : (
             <button
-              className="px-4 py-2 bg-accent text-accent-fg rounded-xl text-sm font-medium hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-              onClick={handleSend}
-              disabled={!input.trim() && !pendingQuote}
+              className="cr-chat-font-btn text-[11.5px] text-faint hover:text-text-strong flex items-center gap-1 py-0.5 transition-colors shrink-0"
+              onClick={() => setChatFontSize(nextChatFontSize(chatFontSize))}
+              title={`聊天字級：${CHAT_FONT_LABELS[chatFontSize]}（${CHAT_FONT_PX[chatFontSize]}）— 點一下換下一檔`}
             >
-              送出
+              <span className="cr-serif text-[13px] leading-none">Aa</span>
+              {CHAT_FONT_LABELS[chatFontSize]}
+              <svg width="8" height="8" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M4 6l4 4 4-4" /></svg>
             </button>
-          )}
-        </div>
-        <button
-          className="text-xs text-muted hover:text-accent flex items-center gap-1 px-1 transition-colors"
-          onClick={async () => {
-            try {
-              const text = await navigator.clipboard.readText();
-              if (text.trim()) {
-                setInput(prev => prev + (prev ? '\n\n' : '') + `關於這段原文：\n「${text.trim()}」\n\n`);
-                inputRef.current?.focus();
-              }
-            } catch {
-              setInput(prev => prev + (prev ? '\n\n' : '') + '關於這段原文：\n「」\n\n');
-              inputRef.current?.focus();
-            }
-          }}
-          title="從 PDF 複製文字後，點這裡貼入"
-        >
-          貼上原文提問
-        </button>
-
-        {/* 工具列：字級開關永遠在，提取洞察照舊要有兩條訊息才出現 */}
-        <div className="flex items-center gap-2">
-          <button
-            className="cr-chat-font-btn text-xs text-muted hover:text-accent flex items-center gap-1 px-1 transition-colors"
-            onClick={() => setChatFontSize(nextChatFontSize(chatFontSize))}
-            title={`聊天字級：${CHAT_FONT_LABELS[chatFontSize]}（${CHAT_FONT_PX[chatFontSize]}）— 點一下換下一檔`}
-          >
-            <span className="cr-serif text-[13px] leading-none">Aa</span>
-            {CHAT_FONT_LABELS[chatFontSize]}
-          </button>
-          {messages.length >= 2 && (
-            <>
-              <button
-                className="text-xs text-muted hover:text-accent flex items-center gap-1 px-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                onClick={handleExtract}
-                disabled={extracting}
-                title="從討論中自動提取洞察"
-              >
-                {extracting ? '… 提取中...' : '提取洞察'}
+            <div className="flex-1" />
+            {streaming ? (
+              /* 工單 12 §3.4②：等了 10–17 秒又不想等的時候，她本來只能關頁面。
+                 按下去 fetch 被 abort ⇒ 後端 res 'close' ⇒ 上游那條也收掉，不繼續燒。 */
+              <button className="cr-chat-stop-btn cr-send-btn cr-send-btn--stop shrink-0" onClick={handleStop}>
+                停止
               </button>
-              {extractResult && (
-                /* 工單 08 §3.5：三段各自 >0 才顯示；三段都是 0 時也要給一句回音，
-                   不然按了「提取洞察」之後畫面什麼都不變，看起來像壞了 */
-                <span className="text-xs text-fact">
-                  {[
-                    extractResult.insights.length > 0 && `新增 ${extractResult.insights.length} 條洞察`,
-                    extractResult.skipped > 0 && `${extractResult.skipped} 條進度已跳過`,
-                    extractResult.duplicates > 0 && `${extractResult.duplicates} 條與既有洞察重複已略過`,
-                  ].filter(Boolean).join('；') || '沒有新的洞察'}
-                </span>
-              )}
-            </>
-          )}
+            ) : (
+              <button
+                className="cr-send-btn shrink-0"
+                onClick={handleSend}
+                disabled={!input.trim() && !pendingQuote}
+              >
+                送出
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

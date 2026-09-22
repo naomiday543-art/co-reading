@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { papersApi, tagsApi, treeApi, insightsApi, attachmentsApi } from '../api';
 import { useStore } from '../store';
 import SummaryView from '../components/SummaryView';
@@ -26,6 +27,11 @@ const SPLIT_MAX = 70;
 // 左欄只有半個視窗時放不下 ⇒ 檢視器整頁多出一條橫向捲軸（她兩張截圖量出來都是「還差一成寬」）。
 // 多給左欄 8% 就夠；她自己拖過的位置（localStorage）永遠優先。
 const SPLIT_DEFAULT = 58;
+// 工單 26 §D3：全頁 10px 節奏。工作列與分欄區左右都是這個值，兩者的「切點」才在同一條
+// 垂直線上；拖曳算百分比時也要把它扣掉（基準＝content box）。
+const SPLIT_PAD = 10;
+// 左右欄之間的中縫（工作列與分欄區共用同一個值）
+const SPLIT_GAP = 6;
 
 function loadSplit() {
   try {
@@ -47,7 +53,7 @@ function loadDrawerWidth() {
   }
 }
 
-export default function PaperDetail({ paperId, onBack, onNavigate }) {
+export default function PaperDetail({ paperId, onBack, onNavigate, headerMainSlot = null, headerEndSlot = null }) {
   const [paper, setPaper] = useState(null);
   const [loading, setLoading] = useState(true);
   const [split, setSplit] = useState(loadSplit);
@@ -59,8 +65,13 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
   // 工單 24 §D4：補充文件清單。撈在這一層，「原文」tab 的標籤才知道有幾份。
   const [attachments, setAttachments] = useState([]);
   // 工單 24b：分頁列右側的插槽（DOM node）。用 state 存、不用 useRef——節點就位要觸發重渲染，
-  // FullTextView 才拿得到它去 createPortal。
+  // FullTextView 才拿得到它去 createPortal。工單 26 §D2 之後這格住在跨欄工作列的左半。
   const [controlsSlot, setControlsSlot] = useState(null);
+  // 工單 26 §D2：工作列右半＝右欄的標頭（「討論」那一行）。同上，ChatPanel 拿它去 portal。
+  // 閱讀模式下右半不渲染 ⇒ 這裡變回 null，ChatPanel 自己退回內部的頭部容器。
+  const [chatHeadSlot, setChatHeadSlot] = useState(null);
+  // 分隔線 hover（工單 26 §D3：靜止安靜、hover／拖曳才變強調色）
+  const [splitHover, setSplitHover] = useState(false);
   const [tagInput, setTagInput] = useState('');
   const [tagSuggestions, setTagSuggestions] = useState([]);
   const [showTagSuggest, setShowTagSuggest] = useState(false);
@@ -136,6 +147,23 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
       .catch(() => {});
   }, [paper?.id]);
 
+  // 狀態下拉搬進頂列之後是一片絕對定位的小板子——點外面／Escape 要收得掉，
+  // 而且 listener 必須在關掉時就拆（不然它會一直賴在 document 上）。
+  const statusBoxRef = useRef(null);
+  useEffect(() => {
+    if (!statusMenu) return;
+    const onDown = (e) => {
+      if (!statusBoxRef.current?.contains(e.target)) setStatusMenu(false);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') setStatusMenu(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [statusMenu]);
+
   const handleStatusChange = async (status) => {
     await papersApi.update(paperId, { status });
     setStatusMenu(false);
@@ -199,6 +227,7 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
 
   // Split dragging — uses an overlay to prevent iframe from stealing mouseup
   const [isDragging, setIsDragging] = useState(false);
+  const splitActive = splitHover || isDragging;
   // 雙擊分隔線＝還原。不能用 onDoubleClick：第一下 mousedown 就會蓋上一層全螢幕遮罩
   // （防 iframe 偷走 mouseup），第二下 click 落在遮罩上，瀏覽器不會對握把發 dblclick。
   // 所以在 mousedown 自己量兩下的間隔。
@@ -224,9 +253,12 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
     const onMove = (e) => {
       // 左欄的 `width: N%` 是相對於分欄容器，不是整個視窗——原本用 clientX / innerWidth 算，
       // 側欄開著（容器左邊多 250px）時分隔線完全不跟手。改成以容器自己的位置與寬度為基準。
+      // 工單 26 §D3：容器現在自己帶 10px padding，百分比的基準是 **content box**，
+      // 不是 border box——用 border box 算，拖到底時分隔線會跟工作列的切點差 10px。
       const box = splitBoxRef.current?.getBoundingClientRect();
-      const pct = box && box.width > 0
-        ? ((e.clientX - box.left) / box.width) * 100
+      const inner = box ? box.width - SPLIT_PAD * 2 : 0;
+      const pct = box && inner > 0
+        ? ((e.clientX - box.left - SPLIT_PAD) / inner) * 100
         : (e.clientX / window.innerWidth) * 100;
       const next = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, pct));
       splitRef.current = next;
@@ -342,91 +374,152 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
     return <div className="flex items-center justify-center h-64 text-faint">論文不存在</div>;
   }
 
+  const fullTitle = paper.title || paper.pdf_filename || '未命名';
+
+  // 工單 26 §D1：這一段照常在 PaperDetail 裡宣告，只是畫到 App 頂列的插槽去
+  // （createPortal 不改 React 樹，事件與 state 都還在這裡）。
+  const topbarMain = (
+    <>
+      <button onClick={onBack} className="flex items-center gap-1 text-muted hover:text-text-strong text-[12.5px] shrink-0 px-1.5 py-1 rounded-md hover:bg-surface-hover transition-colors">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
+        返回列表
+      </button>
+      {/* 閱讀模式開關——抽屜開著時也不會被蓋住 */}
+      <button
+        className={`text-[11.5px] border rounded-full pl-2 pr-2.5 py-[3px] flex items-center gap-1 shrink-0 transition-colors ${readingMode
+          ? 'border-accent bg-accent-soft text-accent font-medium'
+          : 'border-border text-muted hover:bg-surface-hover hover:text-text-strong'
+        }`}
+        onClick={toggleReadingMode}
+        title={readingMode ? '離開閱讀模式' : '閱讀模式：論文撐滿，討論收到右下角'}
+      >
+        {readingMode ? (
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3" /></svg>
+        ) : (
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" /></svg>
+        )}
+        {readingMode ? '離開閱讀' : '閱讀模式'}
+      </button>
+
+      <div className="flex-1 min-w-0 flex items-center gap-2">
+        <h2 className="cr-serif text-[15.5px] text-text-strong truncate min-w-0" title={fullTitle}>{fullTitle}</h2>
+
+        {/* Status dropdown */}
+        <div className="relative shrink-0" ref={statusBoxRef}>
+          <button
+            className="text-[11.5px] border border-border bg-surface-alt rounded-full pl-2.5 pr-2 py-[3px] text-muted hover:bg-surface-hover hover:text-text-strong flex items-center gap-1 transition-colors"
+            onClick={() => setStatusMenu(!statusMenu)}
+          >
+            {statusLabels[paper.status]} ▾
+          </button>
+          {statusMenu && (
+            <div className="absolute left-0 top-[calc(100%+5px)] bg-surface border border-border rounded-lg shadow-lg z-[60] py-1 text-sm min-w-[104px]">
+              {Object.entries(statusLabels).map(([k, v]) => (
+                <button key={k} className="block w-full text-left px-3 py-1.5 hover:bg-surface-hover"
+                  onClick={() => handleStatusChange(k)}>{v}</button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+
+  // 工單 26 §三：最右那顆**不是**「關閉這篇」，是刪除論文（有 confirm）——換成垃圾桶，
+  // 字也講清楚，免得她以為只是把頁面關掉。
+  const deleteButton = (
+    <button
+      onClick={handleDelete}
+      className="w-7 h-7 shrink-0 flex items-center justify-center rounded-md text-faint hover:text-danger hover:bg-surface-hover transition-colors"
+      title="刪除這篇論文"
+    >
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2.8 4.2h10.4M6.3 4.2V2.9h3.4v1.3M4.1 4.2l.6 8.2a1 1 0 0 0 1 .93h4.6a1 1 0 0 0 1-.93l.6-8.2M6.6 6.5v4.4M9.4 6.5v4.4" />
+      </svg>
+    </button>
+  );
+
   return (
     <div className="flex flex-col h-full">
-      {/* Top bar */}
-      <div className="cr-detail-topbar flex items-center justify-between mb-4 shrink-0 gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <button onClick={onBack} className="flex items-center gap-1.5 text-muted hover:text-text-strong text-[13px] shrink-0 transition-colors">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
-            返回列表
-          </button>
-          {/* 閱讀模式開關——放左群組，抽屜開著時也不會被蓋住 */}
-          <button
-            className={`text-[11.5px] border rounded-full pl-2 pr-2.5 py-1 flex items-center gap-1 shrink-0 transition-colors ${readingMode
-              ? 'border-accent bg-accent-soft text-accent font-medium'
-              : 'border-border-soft bg-surface-alt text-muted hover:bg-surface-hover'
-            }`}
-            onClick={toggleReadingMode}
-            title={readingMode ? '離開閱讀模式' : '閱讀模式：論文撐滿，討論收到右下角'}
-          >
-            {readingMode ? (
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3" /></svg>
-            ) : (
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" /></svg>
-            )}
-            {readingMode ? '離開閱讀' : '閱讀模式'}
-          </button>
-          <div className="w-px h-5 bg-border shrink-0" />
-          <h2 className="cr-serif font-semibold text-[15.5px] text-text-strong truncate">{paper.title || paper.pdf_filename || '未命名'}</h2>
-
-          {/* Status dropdown */}
-          <div className="relative shrink-0">
-            <button
-              className="text-[11.5px] border border-border-soft bg-surface-alt rounded-full pl-2.5 pr-2 py-1 text-muted hover:bg-surface-hover flex items-center gap-1"
-              onClick={() => setStatusMenu(!statusMenu)}
-            >
-              {statusLabels[paper.status]} ▾
-            </button>
-            {statusMenu && (
-              <div className="absolute left-0 top-8 bg-surface border border-border rounded-lg shadow-lg z-20 py-1 text-sm">
-                {Object.entries(statusLabels).map(([k, v]) => (
-                  <button key={k} className="block w-full text-left px-3 py-1.5 hover:bg-surface-hover"
-                    onClick={() => handleStatusChange(k)}>{v}</button>
-                ))}
-              </div>
-            )}
-          </div>
-
+      {/* Top bar —— 兩個插槽都在時整列住進 App 的 52px 頂列；
+          拿不到插槽（別處單獨用這個元件）就退回原本這一條，功能一顆不少。 */}
+      {headerMainSlot ? createPortal(topbarMain, headerMainSlot) : null}
+      {headerEndSlot ? createPortal(deleteButton, headerEndSlot) : null}
+      {(!headerMainSlot || !headerEndSlot) && (
+        <div className="cr-detail-topbar flex items-center justify-between mb-4 shrink-0 gap-2.5">
+          {!headerMainSlot && <div className="flex items-center gap-2.5 min-w-0 flex-1">{topbarMain}</div>}
+          {!headerEndSlot && deleteButton}
         </div>
+      )}
 
-        <button onClick={handleDelete} className="text-faint hover:text-danger text-sm shrink-0 p-1 rounded hover:bg-surface-hover transition-colors" title="刪除">
-          ✕
-        </button>
-      </div>
-
-      {/* Split content */}
-      <div ref={splitBoxRef} className="cr-detail-split flex flex-1 overflow-hidden gap-0 min-h-0">
-        {/* Left: Summary / Fulltext tabs */}
-        <div className="cr-detail-pane flex flex-col overflow-hidden" style={{ width: readingMode ? '100%' : `${split}%` }}>
-          {/* Tab bar */}
-          <div className="flex flex-wrap-reverse items-end border-b border-border-soft mb-3 shrink-0">
+      {/* 工單 26 §D2：跨兩欄的工作列（36px）。用分隔線的 x 把它切成兩半——左半是分頁＋
+          膠囊組（原本住在左欄裡的那一列），右半**直接就是右欄的標頭**，右欄因此少掉兩行。
+          左右 padding 與下面的分欄區同為 10px、中縫同為 6px，切點才對得齊。 */}
+      <div
+        className="cr-workbar shrink-0"
+        style={{
+          display: 'flex',
+          alignItems: 'stretch',
+          padding: `0 ${SPLIT_PAD}px`,
+          borderBottom: '1px solid var(--border-soft)',
+          minHeight: 36,
+          position: 'relative',
+          zIndex: 20,   // 膠囊的 ⋯ 選單要壓得過下面那片 PDF iframe
+        }}
+      >
+        <div
+          className="cr-workbar-left flex flex-wrap-reverse items-center justify-between gap-x-2.5 gap-y-1 min-w-0"
+          style={{ width: readingMode ? '100%' : `${split}%`, paddingRight: 8 }}
+        >
+          <div className="flex items-stretch self-stretch gap-3.5 shrink-0">
             <button
-              className={`text-[13px] px-3 py-2 border-b-2 -mb-px transition-colors whitespace-nowrap shrink-0 ${leftTab === 'summary' ? 'border-accent text-accent font-medium' : 'border-transparent text-muted hover:text-text-strong'}`}
+              className={`text-[13px] flex items-center whitespace-nowrap shrink-0 border-b-2 transition-colors ${leftTab === 'summary' ? 'border-accent text-accent font-medium' : 'border-transparent text-muted hover:text-text-strong'}`}
+              style={{ minHeight: 35, padding: '0 1px' }}
               onClick={() => setLeftTab('summary')}
             >
               AI 摘要
             </button>
             <button
-              className={`text-[13px] px-3 py-2 border-b-2 -mb-px transition-colors whitespace-nowrap shrink-0 ${leftTab === 'fulltext' ? 'border-accent text-accent font-medium' : 'border-transparent text-muted hover:text-text-strong'}`}
+              className={`text-[13px] flex items-center whitespace-nowrap shrink-0 border-b-2 transition-colors ${leftTab === 'fulltext' ? 'border-accent text-accent font-medium' : 'border-transparent text-muted hover:text-text-strong'}`}
+              style={{ minHeight: 35, padding: '0 1px' }}
               onClick={() => setLeftTab('fulltext')}
             >
               原文{attachments.length > 0 && (
                 <span className="text-[11px] text-faint ml-1">· SI {attachments.length}</span>
               )}
             </button>
-            {/* 工單 24b：原文分頁的「正文｜SI…｜＋」與「PDF 原檔｜文字版」收在這一行右側
-                （FullTextView 用 portal 畫進來）——她嫌那兩排佔地方，要把高度還給 PDF。
-                摘要分頁時這格是空的。pr-4 對齊下面內容區的右內距。
-                左欄被拖得很窄、一行放不下時：分頁列用 wrap-reverse，這格**整塊**換到上面一行，
-                兩顆分頁仍留在底行貼著底線（不會被擠成三行）。 */}
-            <div
-              ref={setControlsSlot}
-              className="ml-auto flex items-center flex-wrap justify-end gap-1.5 min-w-0 max-w-full pl-2 pr-4 py-1"
-            />
           </div>
+          {/* 工單 24b：原文分頁的「正文｜SI…｜＋」與「PDF 原檔｜文字版」收在這一格
+              （FullTextView 用 portal 畫進來）。摘要分頁時這格是空的。
+              左半被拖得很窄、一行放不下時：wrap-reverse 讓這格**整塊**換到分頁上方一行，
+              兩顆分頁仍留在底行貼著底線（不會被擠成三行）——行為與工單 24b 相同。 */}
+          <div
+            ref={setControlsSlot}
+            className="flex items-center flex-wrap justify-end gap-1.5 min-w-0 max-w-full shrink-0"
+            style={{ padding: '3px 0' }}
+          />
+        </div>
+        {!readingMode && <div className="shrink-0" style={{ width: SPLIT_GAP }} />}
+        {/* 右半＝「討論」標頭（ChatPanel portal 進來）。閱讀模式下右欄是浮動抽屜，
+            這半邊不渲染，標頭自己退回抽屜內部的頭部容器。 */}
+        {!readingMode && (
+          <div
+            ref={setChatHeadSlot}
+            className="cr-workbar-right flex-1 min-w-0 flex items-center"
+            style={{ paddingLeft: 8 }}
+          />
+        )}
+      </div>
 
-          <div className="overflow-y-auto pr-4 flex-1">
+      {/* Split content */}
+      <div
+        ref={splitBoxRef}
+        className="cr-detail-split flex flex-1 overflow-hidden gap-0 min-h-0"
+        style={{ padding: SPLIT_PAD }}
+      >
+        {/* Left: Summary / Fulltext */}
+        <div className="cr-detail-pane flex flex-col overflow-hidden min-h-0" style={{ width: readingMode ? '100%' : `${split}%` }}>
+          <div className="overflow-y-auto pr-2 flex-1 min-h-0">
           {leftTab === 'summary' ? (
             <>
             {/* 工單 12 §3.5：AI 只讀得到前 N 字，超過的部分她有權知道 */}
@@ -591,15 +684,46 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
           </div>
         </div>
 
-        {/* Split handle — 閱讀模式下不渲染 */}
+        {/* Split handle — 閱讀模式下不渲染。
+            工單 26 §D3：靜止時安靜（1px 直線＋40px 握把），hover／拖曳才變強調色並長到
+            64px；真正加強的是命中範圍——左右各外擴 5px 的透明層（實際可抓 16px）。
+            那一層是握把的子元素，mousedown 照樣冒泡上來，雙擊還原不受影響。 */}
         {!readingMode && (
           <div
-            className="cr-split-handle group relative w-1.5 bg-border-soft hover:bg-accent-soft cursor-col-resize shrink-0 rounded-full my-4 transition-colors"
+            className="cr-split-handle shrink-0"
             title="拖曳調整左右寬度（會記住位置）· 雙擊還原"
             onMouseDown={handleMouseDown}
+            style={{
+              width: SPLIT_GAP,
+              cursor: 'col-resize',
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: splitActive ? 'var(--accent-soft)' : 'transparent',
+              transition: 'background 0.15s',
+            }}
           >
-            {/* 中間一小段深一點的握把：原本整條跟背景幾乎同色，她根本不知道這裡能拖 */}
-            <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-10 rounded-full bg-faint opacity-40 group-hover:opacity-100 group-hover:bg-accent transition" />
+            <span
+              className="pointer-events-none"
+              style={{
+                position: 'absolute', top: 0, bottom: 0, left: 2.5, width: 1,
+                background: splitActive ? 'transparent' : 'var(--border)',
+              }}
+            />
+            <span
+              className="pointer-events-none"
+              style={{
+                position: 'relative', width: 4, height: splitActive ? 64 : 40, borderRadius: 3,
+                background: splitActive ? 'var(--accent)' : 'var(--faint)',
+                transition: 'height 0.15s, background 0.15s',
+              }}
+            />
+            <span
+              style={{ position: 'absolute', top: 0, bottom: 0, left: -5, right: -5 }}
+              onMouseEnter={() => setSplitHover(true)}
+              onMouseLeave={() => setSplitHover(false)}
+            />
           </div>
         )}
 
@@ -610,8 +734,8 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
         <div
           className={readingMode
             ? `cr-chat-drawer${drawerOpen ? ' cr-chat-drawer--open' : ''}`
-            : 'cr-detail-pane overflow-y-auto pl-4 flex flex-col min-h-0'}
-          style={readingMode ? { width: `${drawerWidth}px` } : { width: `${100 - split}%` }}
+            : 'cr-detail-pane overflow-y-auto pl-2 flex flex-col flex-1 min-w-0 min-h-0'}
+          style={readingMode ? { width: `${drawerWidth}px` } : undefined}
         >
           {readingMode && (
             <>
@@ -632,6 +756,7 @@ export default function PaperDetail({ paperId, onBack, onNavigate }) {
           <ChatPanel
             paperId={paperId}
             paper={paper}
+            chatHeadSlot={chatHeadSlot}
             onMessagesUpdated={handleMessagesUpdated}
             onSaveInsight={(msg) => {
               setInsightSeed({ source_paper_id: paperId, source_message_id: msg?.id || '' });

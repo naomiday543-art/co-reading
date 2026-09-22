@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, forwardRef, useImperativeHandle } from 'react';
 
 // 在巢狀樹裡找節點，順便回傳祖先路徑（用來標「方向 / 子分類」）。
 function findNode(nodes, id, path = []) {
@@ -14,10 +14,22 @@ import { papersApi } from '../api';
 
 // compact：細條版（工單 25）。論文庫以外的頁面都用它——那些頁面的垂直空間要留給
 // PDF／討論／進度圖；拖放上傳在那裡是次要動作，靶不用那麼大。功能一樣不少。
-export default function UploadZone({ onUploaded, compact = false }) {
+//
+// variant="overlay"（工單 26 §D6，論文詳情頁用）：**一條都不畫**。上傳入口收成頂列
+// 右側那顆 ⬆ 鈕（App 透過 ref 叫 open()），把檔案拖進視窗時整個畫面才變成拖放層。
+// 這樣閱讀頁最底下那 38px 全部還給 PDF 與討論；選檔／批次／方向／失敗回報一個不少。
+const UploadZone = forwardRef(function UploadZone(
+  { onUploaded, compact = false, variant = 'strip', onStatus },
+  ref,
+) {
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState([]);
+  // 全視窗拖放層（overlay 版）：dragleave 會在子元素之間亂跳，所以用進出計數，
+  // 歸零才收層。drop／dragend 一律強制歸零，免得層卡在畫面上擋住整頁。
+  const [dropActive, setDropActive] = useState(false);
+  // 上傳完才報的失敗檔名（4 秒後自己消失）——細條沒了，失敗不能跟著靜悄悄。
+  const [failedNames, setFailedNames] = useState([]);
   const fileInputRef = useRef(null);
 
   // 上傳時選方向（工單 07 §3.4）：頂層節點才是方向。
@@ -44,7 +56,9 @@ export default function UploadZone({ onUploaded, compact = false }) {
   const handleFiles = async (files) => {
     if (!files.length) return;
     setUploading(true);
-    setProgress(Array.from(files).map(f => ({ name: f.name, status: 'uploading' })));
+    setFailedNames([]);
+    let items = Array.from(files).map(f => ({ name: f.name, status: 'uploading' }));
+    setProgress(items);
 
     try {
       const hasDirections = (useStore.getState().tree || []).length > 0;
@@ -58,12 +72,19 @@ export default function UploadZone({ onUploaded, compact = false }) {
       const results = await papersApi.upload(files, treeNodeId);
 
       // Update progress with results
-      setProgress(prev => prev.map((p, i) => {
+      items = items.map((p, i) => {
         const r = Array.isArray(results) ? results[i] : results;
         return { ...p, status: r?.analyze_status === 'error' ? 'error' : 'done', id: r?.id };
-      }));
+      });
     } catch (err) {
-      setProgress(prev => prev.map(p => ({ ...p, status: 'error' })));
+      items = items.map(p => ({ ...p, status: 'error' }));
+    }
+    setProgress(items);
+
+    // overlay 版沒有細條可以顯示那排 ✓／✕，失敗的檔名改用頂列下方的小提示講出來。
+    if (variant === 'overlay') {
+      const failed = items.filter(p => p.status === 'error').map(p => p.name);
+      if (failed.length > 0) setFailedNames(failed);
     }
 
     onUploaded();
@@ -73,6 +94,130 @@ export default function UploadZone({ onUploaded, compact = false }) {
     }, 2000);
   };
 
+  // 讓 App 的 ⬆ 鈕開得了檔案選擇器（工單 26 §D6）
+  useImperativeHandle(ref, () => ({
+    open: () => fileInputRef.current?.click(),
+  }), []);
+
+  // 給頂列那顆 ⬆ 鈕用的狀態（轉圈＋title 寫進度）。onStatus 是 App 的 setState，
+  // 身分穩定，所以不放進 deps——放進去會變成每次 render 都重跑。
+  useEffect(() => {
+    if (variant !== 'overlay') return;
+    onStatus?.({ uploading, progress });
+  }, [variant, uploading, progress]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 失敗提示 4 秒後自己收掉
+  useEffect(() => {
+    if (failedNames.length === 0) return;
+    const timer = setTimeout(() => setFailedNames([]), 4000);
+    return () => clearTimeout(timer);
+  }, [failedNames]);
+
+  // 全視窗拖放（overlay 版）。handleFiles 每次 render 都是新的（它讀 directionChoice），
+  // 所以掛 listener 時走 ref，不然每 render 都要重新訂閱一輪。
+  const handleFilesRef = useRef(handleFiles);
+  handleFilesRef.current = handleFiles;
+  useEffect(() => {
+    if (variant !== 'overlay') return;
+    let depth = 0;
+    // 只對「拖檔案」反應：拖一段文字、拖一個連結進來不該讓整頁變成上傳靶。
+    const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
+    const onEnter = (e) => {
+      if (!hasFiles(e)) return;
+      depth += 1;
+      setDropActive(true);
+    };
+    const onOver = (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();                       // 不攔的話瀏覽器會直接開那個 PDF
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    };
+    const onLeave = (e) => {
+      if (!hasFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      // relatedTarget 為 null＝真的離開視窗了（在子元素之間移動時它有值）
+      if (depth === 0 || e.relatedTarget === null) { depth = 0; setDropActive(false); }
+    };
+    const onDrop = (e) => {
+      e.preventDefault();
+      depth = 0;
+      setDropActive(false);
+      const files = e.dataTransfer?.files;
+      if (files && files.length > 0) handleFilesRef.current(files);
+    };
+    const onEnd = () => { depth = 0; setDropActive(false); };
+    window.addEventListener('dragenter', onEnter);
+    window.addEventListener('dragover', onOver);
+    window.addEventListener('dragleave', onLeave);
+    window.addEventListener('drop', onDrop);
+    window.addEventListener('dragend', onEnd);
+    return () => {
+      window.removeEventListener('dragenter', onEnter);
+      window.removeEventListener('dragover', onOver);
+      window.removeEventListener('dragleave', onLeave);
+      window.removeEventListener('drop', onDrop);
+      window.removeEventListener('dragend', onEnd);
+    };
+  }, [variant]);
+
+  const fileInput = (
+    <input
+      ref={fileInputRef}
+      type="file"
+      accept=".pdf"
+      multiple
+      className="hidden"
+      onChange={e => { handleFiles(e.target.files); e.target.value = ''; }}
+    />
+  );
+
+  const directionPicker = directions.length > 0 && (
+    <>
+      <option value="">先不歸類</option>
+      {directions.map(d => (
+        <option key={d.id} value={d.id}>{d.name}</option>
+      ))}
+      {subNodeOption && (
+        <option value={subNodeOption.id}>{subNodeOption.label}（子分類）</option>
+      )}
+    </>
+  );
+
+  // ── overlay 版（論文詳情頁）：平常什麼都不畫 ───────────────────────────
+  if (variant === 'overlay') {
+    return (
+      <>
+        {fileInput}
+        {failedNames.length > 0 && (
+          <div className="cr-upload-fail" role="status">
+            ✕ 這 {failedNames.length} 份沒上傳成功：{failedNames.join('、')}
+          </div>
+        )}
+        {dropActive && (
+          <div className="cr-drop-overlay">
+            <div className="cr-drop-overlay-frame">
+              <svg width="30" height="30" viewBox="0 0 16 16" fill="none" stroke="var(--accent)" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><path d="M8 11V3.5M5.4 6.1L8 3.5l2.6 2.6M3 11.5v1.5h10v-1.5" /></svg>
+              <div className="text-[15px] text-text-strong">放開以加入論文庫 · 支援批次匯入</div>
+              {directions.length > 0 && (
+                <div className="flex items-center gap-2" style={{ pointerEvents: 'auto' }}>
+                  <span className="text-[12px] text-faint">這篇屬於</span>
+                  <select
+                    className="text-[12px] bg-surface-alt border border-border rounded-lg px-2 py-1 text-text cursor-pointer focus:outline-none focus:border-accent"
+                    value={directionChoice}
+                    onChange={e => setDirectionChoice(e.target.value)}
+                  >
+                    {directionPicker}
+                  </select>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // ── 細條／大靶版（論文庫與其他頁面，工單 25 之後完全沒變）──────────────
   return (
     <div
       className={`cr-uploadzone ${compact ? 'mx-6 mb-2 rounded-lg' : 'm-6 mt-0 rounded-xl'} border-[1.5px] border-dashed transition-colors ${dragOver ? 'border-accent bg-accent-soft' : 'border-border bg-surface-alt'}`}
@@ -112,27 +257,16 @@ export default function UploadZone({ onUploaded, compact = false }) {
                   value={directionChoice}
                   onChange={e => setDirectionChoice(e.target.value)}
                 >
-                  <option value="">先不歸類</option>
-                  {directions.map(d => (
-                    <option key={d.id} value={d.id}>{d.name}</option>
-                  ))}
-                  {subNodeOption && (
-                    <option value={subNodeOption.id}>{subNodeOption.label}（子分類）</option>
-                  )}
+                  {directionPicker}
                 </select>
               </div>
             )}
           </>
         )}
       </div>
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".pdf"
-        multiple
-        className="hidden"
-        onChange={e => { handleFiles(e.target.files); e.target.value = ''; }}
-      />
+      {fileInput}
     </div>
   );
-}
+});
+
+export default UploadZone;
