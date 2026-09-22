@@ -163,3 +163,25 @@ frontend/src/components/UploadZone.jsx     forwardRef/open()、variant="overlay"
 7. **深色模式**：全部走 token，沒有一處寫死色值（唯一的半透明走 `color-mix`）。但**沒有截圖比對過**，特別是選中 SI 膠囊裡那條分隔線與眼睛的 `.55` 透明度在深色下夠不夠看得出來。
 8. **上傳失敗提示**只在 overlay 版（論文頁）出現；細條版維持原本那排 ✓／✕。兩者行為不同是刻意的，但我沒驗過失敗路徑（要真的傳一份壞檔）。
 9. `npm test` 的 631 條**沒有一條測前端版面**（只有兩條讀 `ChatPanel.jsx`／`CarryoverPanel.jsx`／`PaperDetail.jsx` 的原文釘文案，我確認過那些字串一個都沒被我改掉）。**測試綠不代表版面對。**
+
+---
+
+## 附錄 B：親驗記錄（2026-09-21 深夜～22 凌晨，Elias）
+
+**環境**：worktree `wo26` @ `4737987`；驗收服務 `:3476` 吃她資料的**新副本**（sqlite `.backup`，papers 13／messages 97／attachments 1 對帳過），副本設定改指本機**慢速串流假上游** `:3481`（每 300–400ms 吐一段，共 30–45 段；key 抹掉、gateway 指死埠）。她的真服務當時已關（:3456／:5173 無 listener），真庫零觸碰。瀏覽器 1300×660。
+
+**親手跑的**
+- `npm test` 631/631；`npm run build -- --outDir <暫存> --emptyOutDir=false` 綠；diff 白名單 7 個前端檔＋工單，`src/`／`data/`／`package*.json`／`dist/`／`test/` 零改動。
+- **高度（1300×660）**：頂列 52 ＋ 工作列 37 ＝ **89px**（目標 88±2 ✅）；分欄區頂 y=89；**PDF 框 551px**（稿子預算 552、原 463 ✅）；框底 650 ／ 分欄底 660 ／ 視窗底 660——兩欄同一條底線、無外層捲軸、無橫向溢出；舊 `cr-detail-topbar` 與上傳細條都不在 DOM。論文庫頁不變（header 50、上傳大靶 57px）。
+- **串流中切閱讀模式（最要緊的一項）**：送出後 1.8s 切閱讀模式 → 3.6s 切回分欄 → 串流照走到第 30 段結束；假上游日誌 `finished all 30 chunks`、無 `CLIENT DISCONNECTED`；後端 `[CHAT] ok chunks=31`；DB 落庫完整。切換全程 `精煉本次共讀` 鈕與 textarea 是**同一個 DOM 節點**（`data-probe` 標記存活）⇒ `CarryoverPanel`／`ChatPanel` 沒有 remount；頭部容器在工作列右半 ↔ 抽屜 fallback 之間搬家正常；展開中的 carryover 卡切換後仍展開。
+  - 🔴 驗收時第一發「串流 45s 停滯失敗」是**我假上游的 bug**（Node ≥16 的 `req 'close'` 在請求收完就響，被我當成斷線）——不是產品問題，修了假上游重打三次都過。
+- **SI 膠囊**：選中展開成 `SI 1｜28,402 字｜👁｜⋯`，舊工具列消失、工作列仍 37px；👁 點一下 `ai_visible` 1→0，title 由「AI 讀得到這份」變「AI 讀不到這份」；⋯ 選單（186px，浮在 PDF 之上）：檔名標頭／`AI 讀得到 關閉`／改名／刪除這份；改名 Enter 存、Escape 不存（對 API）；刪除第一下只出「確定刪除這份補充文件？不動論文。」＋刪除／取消，DB 仍在；Escape 關選單。驗完把 label／ai_visible 還原。
+- **頂列**：⬆ 鈕開的是 `UploadZone` 的 hidden input（`accept=".pdf"` multiple）；垃圾桶＝「刪除這篇論文」，`confirm` 文案照舊、取消後論文仍在。
+- **拖檔進視窗**：帶 `Files` 的 dragenter → 全畫面拖放層（z-index 80、含「這篇屬於」下拉）；離開視窗關；純文字拖曳不觸發。
+- **分隔線**：拖到 x=700 → 握把 703、`split=43.3%` 存 localStorage、左欄／工作列左半右緣同為 700（切點對齊）；mousedown 雙擊 → 58%、localStorage 清空、無遮罩殘留。左欄 43% 時工作列折成兩行 75px（`wrap-reverse`，規格內）。
+- **跳回原文**：在 SI＋PDF 模式點氣泡「跳回原文」→ 自動切回正文＋文字版、`data-cr-offset=14895` 那段閃、1.8s 熄。文字版卡片：serif 14.5px、自己捲動、`data-cr-offset` 錨點 11 個健在。
+  - 既有限制（**非本單造成**）：這篇論文抽字幾乎沒有雙換行，11 個段落各 2,000–6,400px 高；跳回用 `block:'center'` 會把巨型段落的**中點**捲進畫面，引用那幾行不一定在視窗內。工單 14 以來就這樣；改法＝段落高過視窗時改 `block:'start'`＋依字元偏移比例微調——另開小單。
+- **深色**：`data-theme=dark` 下選中膠囊／送出鈕＝`#DA8666` 底、`#1B1815` 字（token 正確）；`color-mix` 分隔線瀏覽器支援。
+
+**未驗**：行動版（≤767px）；`Aa` 字級三檔輪替與「貼上原文提問」只確認鈕在、沒逐一按；上傳成功／失敗後的提示列沒實跑（需真檔案）。
+**Claude Design 稿 vs 實作**：全部照稿，除工單 §三 三處更正＋附錄 A.5 八條偏離（我認可）。
